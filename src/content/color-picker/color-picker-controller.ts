@@ -4,7 +4,7 @@ import type { ToolLifecycle } from '../tool-controller';
 import { rgbToHex, rgbToHsl, type RgbColor } from './color-converter';
 import { ColorPickerOverlay } from './color-picker-overlay';
 import { captureVisibleTab, CaptureManager, nextPaint } from './capture-manager';
-import { PixelSampler } from './pixel-sampler';
+import { getCaptureViewport, PixelSampler } from './pixel-sampler';
 
 export class ColorPickerController implements ToolLifecycle {
   readonly #onExit: () => void;
@@ -17,7 +17,6 @@ export class ColorPickerController implements ToolLifecycle {
   #frame: number | null = null;
   #lastPoint: Point | null = null;
   #lastColor: RgbColor | null = null;
-  #refreshTimer: number | null = null;
 
   public constructor(onExit: () => void) { this.#onExit = onExit; }
   public get active(): boolean { return this.#active; }
@@ -39,7 +38,6 @@ export class ColorPickerController implements ToolLifecycle {
     });
     this.#addListeners();
     await this.#capture.refresh();
-    this.#refreshTimer = window.setInterval(() => this.#capture?.schedule(), 2_000);
   }
 
   public disable(): void {
@@ -47,8 +45,7 @@ export class ColorPickerController implements ToolLifecycle {
     this.#active = false;
     this.#removeListeners();
     if (this.#frame !== null) window.cancelAnimationFrame(this.#frame);
-    if (this.#refreshTimer !== null) window.clearInterval(this.#refreshTimer);
-    this.#frame = null; this.#refreshTimer = null;
+    this.#frame = null;
     this.#capture?.destroy(); this.#capture = null;
     this.#overlay?.destroy(); this.#overlay = null;
     this.#sampler = null;
@@ -56,14 +53,15 @@ export class ColorPickerController implements ToolLifecycle {
     this.#lastPoint = null; this.#lastColor = null;
   }
 
-  readonly #onMouseMove = (event: MouseEvent): void => {
+  readonly #onPointerMove = (event: PointerEvent): void => {
+    if (!event.isPrimary || (event.pointerType !== 'mouse' && event.pointerType !== 'touch' && event.pointerType !== 'pen')) return;
     this.#lastPoint = { x: event.clientX, y: event.clientY };
     if (this.#frame === null) this.#frame = window.requestAnimationFrame(this.#render);
   };
   readonly #render = (): void => {
     this.#frame = null;
     if (this.#lastPoint === null || this.#sampler === null) return;
-    const color = this.#sampler.sample(this.#lastPoint, { width: window.innerWidth, height: window.innerHeight });
+    const color = this.#sampler.sample(this.#lastPoint, getCaptureViewport());
     if (color === null) return;
     this.#lastColor = color;
     this.#overlay?.update(color, this.#lastPoint, viewportToDocument(this.#lastPoint, { x: window.scrollX, y: window.scrollY }), this.#sampler);
@@ -91,7 +89,8 @@ export class ColorPickerController implements ToolLifecycle {
   }
 
   #addListeners(): void {
-    window.addEventListener('mousemove', this.#onMouseMove, { capture: true, passive: true });
+    window.addEventListener('pointerdown', this.#onPointerMove, { capture: true, passive: true });
+    window.addEventListener('pointermove', this.#onPointerMove, { capture: true, passive: true });
     window.addEventListener('click', this.#onClick, { capture: true, passive: false });
     window.addEventListener('contextmenu', this.#onContextMenu, { capture: true });
     window.addEventListener('keydown', this.#onKeyDown, { capture: true, passive: false });
@@ -99,7 +98,8 @@ export class ColorPickerController implements ToolLifecycle {
     window.addEventListener('resize', this.#onViewportChange, { passive: true });
   }
   #removeListeners(): void {
-    window.removeEventListener('mousemove', this.#onMouseMove, true);
+    window.removeEventListener('pointerdown', this.#onPointerMove, true);
+    window.removeEventListener('pointermove', this.#onPointerMove, true);
     window.removeEventListener('click', this.#onClick, true);
     window.removeEventListener('contextmenu', this.#onContextMenu, true);
     window.removeEventListener('keydown', this.#onKeyDown, true);

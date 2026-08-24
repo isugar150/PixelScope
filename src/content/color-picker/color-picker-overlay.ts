@@ -1,6 +1,6 @@
 import { clampLabelPosition, type Point } from '../coordinate';
 import { contrastRatio, isLightColor, rgbToCmyk, rgbToHex, rgbToHex8, rgbToHsl, rgbToHsv, type RgbColor } from './color-converter';
-import type { PixelSampler } from './pixel-sampler';
+import { getCaptureViewport, type PixelSampler } from './pixel-sampler';
 
 export class ColorPickerOverlay {
   readonly #host = document.createElement('div');
@@ -51,7 +51,7 @@ export class ColorPickerOverlay {
     this.#loupeHex.textContent = hex;
     const context = this.#canvas.getContext('2d');
     if (context !== null) {
-      sampler.drawZoom(context, viewport, { width: window.innerWidth, height: window.innerHeight });
+      sampler.drawZoom(context, viewport, getCaptureViewport());
       context.strokeStyle = '#fff'; context.lineWidth = 2; context.strokeRect(56, 56, 14, 14);
       context.strokeStyle = '#111827'; context.lineWidth = 1; context.strokeRect(57, 57, 12, 12);
     }

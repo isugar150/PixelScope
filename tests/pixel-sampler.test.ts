@@ -10,6 +10,13 @@ describe('capture pixel coordinates', () => {
     expect(viewportToImagePixel({ x: -10, y: 999 }, { width: 500, height: 400 }, { width: 1000, height: 800 }))
       .toEqual({ x: 0, y: 799 });
   });
+  it('subtracts a visual viewport offset before applying capture scales', () => {
+    expect(viewportToImagePixel(
+      { x: 150, y: 90 },
+      { left: 50, top: 40, width: 400, height: 200 },
+      { width: 800, height: 600 },
+    )).toEqual({ x: 200, y: 150 });
+  });
   it('clamps the magnifier source region at image edges', () => {
     expect(calculateSampleRegion({ x: 1, y: 99 }, { width: 100, height: 100 }, 15)).toEqual({ x: 0, y: 85, size: 15 });
   });

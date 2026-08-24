@@ -1,12 +1,26 @@
 import type { Point, Size } from '../coordinate';
 import type { RgbColor } from './color-converter';
 
-export function viewportToImagePixel(point: Point, viewport: Size, image: Size): Point {
+export interface CaptureViewport extends Size {
+  readonly left: number;
+  readonly top: number;
+}
+
+export function getCaptureViewport(): CaptureViewport {
+  const viewport = window.visualViewport;
+  return viewport === null
+    ? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }
+    : { left: viewport.offsetLeft, top: viewport.offsetTop, width: viewport.width, height: viewport.height };
+}
+
+export function viewportToImagePixel(point: Point, viewport: Size & Partial<Pick<CaptureViewport, 'left' | 'top'>>, image: Size): Point {
   const scaleX = image.width / Math.max(1, viewport.width);
   const scaleY = image.height / Math.max(1, viewport.height);
+  const localX = point.x - (viewport.left ?? 0);
+  const localY = point.y - (viewport.top ?? 0);
   return {
-    x: Math.min(image.width - 1, Math.max(0, Math.floor(point.x * scaleX))),
-    y: Math.min(image.height - 1, Math.max(0, Math.floor(point.y * scaleY))),
+    x: Math.min(image.width - 1, Math.max(0, Math.floor(localX * scaleX))),
+    y: Math.min(image.height - 1, Math.max(0, Math.floor(localY * scaleY))),
   };
 }
 
@@ -29,7 +43,7 @@ export class PixelSampler {
     this.#context.drawImage(image, 0, 0);
   }
 
-  public sample(viewportPoint: Point, viewport: Size): RgbColor | null {
+  public sample(viewportPoint: Point, viewport: CaptureViewport): RgbColor | null {
     if (this.#canvas.width === 0 || this.#canvas.height === 0) return null;
     const pixel = viewportToImagePixel(viewportPoint, viewport, this.size);
     const data = this.#context.getImageData(pixel.x, pixel.y, 1, 1).data;
@@ -38,7 +52,7 @@ export class PixelSampler {
     return { r, g, b, a: alpha / 255 };
   }
 
-  public drawZoom(target: CanvasRenderingContext2D, point: Point, viewport: Size, size = 9): void {
+  public drawZoom(target: CanvasRenderingContext2D, point: Point, viewport: CaptureViewport, size = 9): void {
     const pixel = viewportToImagePixel(point, viewport, this.size);
     const source = calculateSampleRegion(pixel, this.size, size);
     target.imageSmoothingEnabled = false;

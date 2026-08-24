@@ -1,6 +1,6 @@
 import { calculateAutoScroll, documentRectToViewport, rectangleFromPoints, viewportToDocument, type Point } from './coordinate';
 import { captureVisibleTab, CaptureManager, nextPaint } from './color-picker/capture-manager';
-import { PixelSampler } from './color-picker/pixel-sampler';
+import { getCaptureViewport, PixelSampler } from './color-picker/pixel-sampler';
 import { findInspectableElement, formatCssPixels, isAreaDrag, isInspectableElement } from './measure-utils';
 import { MeasurementOverlay } from './overlay';
 import { interactionStyles } from './styles';
@@ -24,7 +24,6 @@ export class MeasureController {
   #active = false;
   #lastViewport: Point | null = null;
   #frameId: number | null = null;
-  #refreshTimer: number | null = null;
 
   public constructor(onExit: () => void = () => this.disable()) { this.#onExit = onExit; }
   public get active(): boolean { return this.#active; }
@@ -45,7 +44,6 @@ export class MeasureController {
       afterCapture: () => this.#overlay?.setCaptureHidden(false),
     });
     void this.#capture.refresh().catch(() => undefined);
-    this.#refreshTimer = window.setInterval(() => { this.#capture?.schedule(); this.#ensureFrame(); }, 2_000);
     this.#addListeners();
   }
 
@@ -56,8 +54,6 @@ export class MeasureController {
     this.#disconnectObserver();
     this.#removeListeners();
     this.#cancelFrame();
-    if (this.#refreshTimer !== null) window.clearInterval(this.#refreshTimer);
-    this.#refreshTimer = null;
     this.#capture?.destroy(); this.#capture = null; this.#sampler = null;
     this.#overlay?.destroy(); this.#overlay = null;
     this.#interactionStyle?.remove(); this.#interactionStyle = null;
@@ -65,7 +61,7 @@ export class MeasureController {
   }
 
   readonly #onPointerDown = (event: PointerEvent): void => {
-    if (event.pointerType !== 'mouse' || event.button !== 0) return;
+    if (!event.isPrimary || !isSupportedPointer(event.pointerType) || event.button !== 0) return;
     event.preventDefault(); event.stopImmediatePropagation();
     const viewport = { x: event.clientX, y: event.clientY };
     this.#lastViewport = viewport;
@@ -82,7 +78,9 @@ export class MeasureController {
   };
 
   readonly #onPointerMove = (event: PointerEvent): void => {
-    if (event.pointerType !== 'mouse') return;
+    if (!event.isPrimary || !isSupportedPointer(event.pointerType)) return;
+    const activePointerId = this.#state.type === 'pointer-pending' || this.#state.type === 'area-dragging' ? this.#state.pointerId : null;
+    if (event.pointerType !== 'mouse' && activePointerId !== event.pointerId) return;
     this.#lastViewport = { x: event.clientX, y: event.clientY };
     if (this.#state.type === 'pointer-pending' || this.#state.type === 'area-dragging') {
       event.preventDefault(); event.stopImmediatePropagation();
@@ -91,8 +89,9 @@ export class MeasureController {
   };
 
   readonly #onPointerUp = (event: PointerEvent): void => {
-    if (event.pointerType !== 'mouse' || event.button !== 0) return;
+    if (!event.isPrimary || !isSupportedPointer(event.pointerType) || event.button !== 0) return;
     if (this.#state.type !== 'pointer-pending' && this.#state.type !== 'area-dragging') return;
+    if (this.#state.pointerId !== event.pointerId) return;
     event.preventDefault(); event.stopImmediatePropagation();
     this.#lastViewport = { x: event.clientX, y: event.clientY };
     if (this.#state.type === 'pointer-pending') {
@@ -180,7 +179,7 @@ export class MeasureController {
       this.#overlay?.renderArea(viewportRect, this.#state.start, end);
       measurement = `${formatCssPixels(documentRect.width)} × ${formatCssPixels(documentRect.height)} px`;
     } else if (this.#state.type === 'idle') this.#overlay?.hideMeasurement();
-    this.#overlay?.renderMagnifier(this.#lastViewport, this.#sampler, measurement);
+    this.#overlay?.renderMagnifier(this.#lastViewport, this.#sampler, getCaptureViewport(), measurement);
   }
 
   #elementAt(point: Point): Element | null { return findInspectableElement(document.elementFromPoint(point.x, point.y), this.#overlay?.host); }
@@ -218,4 +217,8 @@ export class MeasureController {
     window.removeEventListener('blur', this.#onBlur); window.removeEventListener('dragstart', this.#preventInteraction, true);
     window.removeEventListener('selectstart', this.#preventInteraction, true);
   }
+}
+
+function isSupportedPointer(pointerType: string): boolean {
+  return pointerType === 'mouse' || pointerType === 'touch' || pointerType === 'pen';
 }

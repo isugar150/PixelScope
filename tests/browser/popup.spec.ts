@@ -32,6 +32,9 @@ test('measure mode blocks page clicks and Escape restores the page', async () =>
   });
   try {
     const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
     await page.setContent('<a id="target" href="#clicked" style="display:block;width:160px;height:80px">Target</a>');
     await page.evaluate(() => {
       const testWindow = window as Window & { measureListener?: (...args: unknown[]) => unknown; linkClicks?: number };
@@ -56,6 +59,9 @@ test('measure mode blocks page clicks and Escape restores the page', async () =>
     await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'element-locked');
     await page.mouse.move(40, 30); await page.mouse.down(); await page.mouse.move(120, 90, { steps: 3 }); await page.mouse.up();
     await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'area');
+    await page.locator('#target').dispatchEvent('pointerdown', { pointerId: 7, pointerType: 'touch', isPrimary: true, button: 0, clientX: 40, clientY: 30 });
+    await page.locator('#target').dispatchEvent('pointerup', { pointerId: 7, pointerType: 'touch', isPrimary: true, button: 0, clientX: 40, clientY: 30 });
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'element-locked');
     await page.keyboard.press('Escape');
     await expect(page.locator('[data-pixelscope-overlay]')).toHaveCount(0);
     await page.locator('#target').click();

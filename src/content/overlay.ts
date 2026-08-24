@@ -1,4 +1,4 @@
-import type { PixelSampler } from './color-picker/pixel-sampler';
+import type { CaptureViewport, PixelSampler } from './color-picker/pixel-sampler';
 import { clampLabelPosition, type Point, type Rect } from './coordinate';
 import { calculateMagnifierPosition, describeElement, formatCssPixels } from './measure-utils';
 import { overlayStyles } from './styles';
@@ -63,14 +63,14 @@ export class MeasurementOverlay {
     this.#panel.style.display = 'block';
   }
 
-  public renderMagnifier(point: Point, sampler: PixelSampler | null, measurement?: string): void {
+  public renderMagnifier(point: Point, sampler: PixelSampler | null, captureViewport: CaptureViewport, measurement?: string): void {
     const position = calculateMagnifierPosition(point, { width: 136, height: 156 }, { width: innerWidth, height: innerHeight });
     this.#magnifier.style.transform = `translate3d(${String(position.x)}px,${String(position.y)}px,0)`;
     this.#magnifierMeta.textContent = `X: ${String(Math.round(point.x))}, Y: ${String(Math.round(point.y))}${measurement === undefined ? '' : ` · ${measurement}`}`;
     const context = this.#canvas.getContext('2d');
     if (sampler === null || context === null || sampler.size.width === 0) { this.#magnifier.className = 'magnifier loading'; return; }
     this.#magnifier.className = 'magnifier';
-    sampler.drawZoom(context, point, { width: innerWidth, height: innerHeight }, 15);
+    sampler.drawZoom(context, point, captureViewport, 15);
     context.strokeStyle = '#fff'; context.lineWidth = 1; context.strokeRect(56.5, 56.5, 8, 8);
     context.beginPath(); context.moveTo(60.5, 53); context.lineTo(60.5, 68); context.moveTo(53, 60.5); context.lineTo(68, 60.5); context.stroke();
   }
