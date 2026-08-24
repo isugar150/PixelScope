@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "PixelScope",
+  "version": "1.0.0",
+  "description": "Measure page regions in pixels without changing page layout.",
+  "permissions": ["activeTab", "scripting", "storage", "clipboardWrite"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "PixelScope 도구",
+    "default_popup": "src/popup/popup.html"
+  }
+}
