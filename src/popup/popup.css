@@ -190,6 +190,7 @@ h1 {
   color: #d7e5f3;
   font-size: 12px;
 }
+.settings-panel label + label { border-top: 1px solid #1d3043; }
 select {
   min-width: 132px;
   height: 36px;

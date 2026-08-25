@@ -24,8 +24,10 @@ export const interactionStyles = `
   }
 `;
 
+export const colorPickerCursorHotspot = { x: 2, y: 30 } as const;
+
 export const colorPickerInteractionStyles = `
   html, html * {
-    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M2 30l5-9L18 10l4 4-11 11-9 5Z' fill='%23f8fafc' stroke='%230f172a' stroke-width='1.75' stroke-linejoin='round'/%3E%3Cpath d='m17 9 3-3 6 6-3 3-6-6Z' fill='%2393c5fd' stroke='%230f172a' stroke-width='1.75' stroke-linejoin='round'/%3E%3Cpath d='m20 6 3-3a3 3 0 0 1 4 4l-3 3-4-4Z' fill='%23f8fafc' stroke='%230f172a' stroke-width='1.75' stroke-linejoin='round'/%3E%3Ccircle cx='3' cy='29' r='1.5' fill='%2360a5fa' stroke='%23fff' stroke-width='.75'/%3E%3C/svg%3E") 3 29, crosshair !important;
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M2 30l5-9L18 10l4 4-11 11-9 5Z' fill='%23f8fafc' stroke='%230f172a' stroke-width='1.75' stroke-linejoin='round'/%3E%3Cpath d='m17 9 3-3 6 6-3 3-6-6Z' fill='%2393c5fd' stroke='%230f172a' stroke-width='1.75' stroke-linejoin='round'/%3E%3Cpath d='m20 6 3-3a3 3 0 0 1 4 4l-3 3-4-4Z' fill='%23f8fafc' stroke='%230f172a' stroke-width='1.75' stroke-linejoin='round'/%3E%3Ccircle cx='2' cy='30' r='1' fill='%2360a5fa'/%3E%3C/svg%3E") ${String(colorPickerCursorHotspot.x)} ${String(colorPickerCursorHotspot.y)}, crosshair !important;
   }
 `;

@@ -53,6 +53,8 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await colorMore.click();
     await expect(measureMore).toHaveAttribute('aria-expanded', 'false');
     await expect(colorMore).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByLabel('피커 범위')).toHaveValue('screen');
+    await page.getByLabel('피커 범위').selectOption('page');
     await page.getByLabel('복사 형식').selectOption('rgb');
     await expect(page.getByText('화면 캡처', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /객체 캡처/ })).toBeVisible();
@@ -64,6 +66,7 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     expect(await page.evaluate(() => document.getElementById('color-options')?.closest('[data-tool-card]')?.getAttribute('data-tool-card'))).toBe('color-picker');
     await expect(page.getByText('복사 후 계속 선택', { exact: true })).toHaveCount(0);
     await page.reload();
+    await expect(page.getByLabel('피커 범위')).toHaveValue('page');
     await expect(page.getByLabel('복사 형식')).toHaveValue('rgb');
     await expect(page.getByLabel('측정 단위')).toHaveValue('rem');
     await page.evaluate(() => {
@@ -83,6 +86,38 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
   } finally { await context.close(); }
 });
 
+test('screen picker opens directly inside the trusted popup click', async () => {
+  const extensionPath = resolve(import.meta.dirname, '../../dist');
+  const context = await chromium.launchPersistentContext('', {
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    let worker = context.serviceWorkers()[0];
+    worker ??= await context.waitForEvent('serviceworker');
+    const extensionId = new URL(worker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/src/popup/popup.html`);
+    await page.evaluate(() => {
+      const testWindow = window as Window & { screenPickerUserActivation?: boolean };
+      Object.defineProperty(window, 'EyeDropper', {
+        configurable: true,
+        value: class {
+          public open(): Promise<never> {
+            testWindow.screenPickerUserActivation = navigator.userActivation.isActive;
+            return Promise.reject(new DOMException('cancelled', 'AbortError'));
+          }
+        },
+      });
+      Object.defineProperty(chrome.scripting, 'executeScript', { configurable: true, value: () => { throw new Error('screen picker must not be injected'); } });
+    });
+    await expect(page.getByLabel('피커 범위')).toHaveValue('screen');
+    await page.getByRole('button', { name: '컬러 피커', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as Window & { screenPickerUserActivation?: boolean }).screenPickerUserActivation)).toBe(true);
+    await expect(page.locator('#error')).toHaveText('');
+  } finally { await context.close(); }
+});
+
 test('capture viewer loads ephemeral PNG and supports pixel-accurate crop and export actions', async () => {
   const extensionPath = resolve(import.meta.dirname, '../../dist');
   const context = await chromium.launchPersistentContext('', {
@@ -96,7 +131,7 @@ test('capture viewer loads ephemeral PNG and supports pixel-accurate crop and ex
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/src/viewer/viewer.html`);
     await page.evaluate(async () => {
-      const canvas = document.createElement('canvas'); canvas.width = 100; canvas.height = 80;
+      const canvas = document.createElement('canvas'); canvas.width = 200; canvas.height = 160;
       const context = canvas.getContext('2d'); if (context === null) throw new Error('canvas unavailable');
       context.fillStyle = '#38bdf8'; context.fillRect(0, 0, 100, 80);
       const blob = await new Promise<Blob>((resolveBlob, reject) => canvas.toBlob((value) => value === null ? reject(new Error('blob unavailable')) : resolveBlob(value), 'image/png'));
@@ -107,7 +142,7 @@ test('capture viewer loads ephemeral PNG and supports pixel-accurate crop and ex
       });
       await new Promise<void>((resolveWrite, reject) => {
         const transaction = database.transaction('captures', 'readwrite');
-        transaction.objectStore('captures').put({ id: 'viewer-test', blob, width: 100, height: 80, title: 'Viewer test', createdAt: Date.now() });
+        transaction.objectStore('captures').put({ id: 'viewer-test', blob, width: 200, height: 160, title: 'Viewer test', createdAt: Date.now() });
         transaction.oncomplete = () => resolveWrite(); transaction.onerror = () => reject(transaction.error ?? new Error('write unavailable'));
       });
       database.close();
@@ -133,23 +168,45 @@ test('capture viewer loads ephemeral PNG and supports pixel-accurate crop and ex
     expect(await page.evaluate(() => chrome.runtime.getManifest().permissions?.includes('downloads'))).toBe(false);
     await page.getByRole('button', { name: '확대' }).click();
     await expect(page.locator('#zoom-value')).not.toHaveText('100%');
+    await page.getByRole('button', { name: '화면 맞춤' }).click();
+    await expect(page.locator('#zoom-value')).toHaveText('100%');
     await page.getByRole('button', { name: '크롭', exact: true }).click();
     await expect(page.locator('#crop-toolbar')).toBeVisible();
-    await expect(page.getByLabel('크롭할 영역을 드래그하세요. 위쪽 숫자 입력으로도 조정할 수 있습니다.')).toBeFocused();
-    const cropLayer = page.locator('#crop-layer');
-    const bounds = await cropLayer.boundingBox();
-    if (bounds === null) throw new Error('crop layer unavailable');
-    await page.mouse.move(bounds.x + bounds.width * 0.1, bounds.y + bounds.height * 0.1);
+    const cropLayer = page.getByRole('region', { name: /크롭 선택 상자입니다/ });
+    await expect(cropLayer).toBeFocused();
+    await expect(page.locator('#crop-x')).toHaveValue('50');
+    await expect(page.locator('#crop-y')).toHaveValue('30');
+    await expect(page.locator('#crop-width')).toHaveValue('100');
+    await expect(page.locator('#crop-height')).toHaveValue('100');
+    await expect(page.locator('[data-crop-handle]')).toHaveCount(8);
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('#crop-x')).toHaveValue('51');
+    await page.keyboard.press('ArrowLeft');
+    await expect(page.locator('#crop-x')).toHaveValue('50');
+
+    const southeastHandle = page.locator('[data-crop-handle="se"]');
+    const handleBounds = await southeastHandle.boundingBox();
+    if (handleBounds === null) throw new Error('crop resize handle unavailable');
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y + handleBounds.height / 2);
     await page.mouse.down();
-    await page.mouse.move(bounds.x + bounds.width * 0.6, bounds.y + bounds.height * 0.6, { steps: 3 });
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2 + 20, handleBounds.y + handleBounds.height / 2 + 15, { steps: 3 });
     await page.mouse.up();
-    await expect(page.locator('#crop-width')).toHaveValue('50');
-    await expect(page.locator('#crop-height')).toHaveValue('40');
+    await expect(page.locator('#crop-width')).toHaveValue('120');
+    await expect(page.locator('#crop-height')).toHaveValue('115');
+
+    const selectionBounds = await page.locator('#crop-selection').boundingBox();
+    if (selectionBounds === null) throw new Error('crop selection unavailable');
+    await page.mouse.move(selectionBounds.x + selectionBounds.width / 2, selectionBounds.y + selectionBounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(selectionBounds.x + selectionBounds.width / 2 + 10, selectionBounds.y + selectionBounds.height / 2 + 5, { steps: 3 });
+    await page.mouse.up();
+    await expect(page.locator('#crop-x')).toHaveValue('60');
+    await expect(page.locator('#crop-y')).toHaveValue('35');
     await page.getByRole('button', { name: '크롭 적용' }).click();
-    await expect(page.locator('#meta')).toContainText('50 × 40 px');
+    await expect(page.locator('#meta')).toContainText('120 × 115 px');
     await expect(page.getByRole('button', { name: '원본 복원' })).toBeVisible();
     await page.getByRole('button', { name: '원본 복원' }).click();
-    await expect(page.locator('#meta')).toContainText('100 × 80 px');
+    await expect(page.locator('#meta')).toContainText('200 × 160 px');
     await page.setViewportSize({ width: 375, height: 720 });
     await page.getByRole('button', { name: '크롭', exact: true }).click();
     expect(await page.locator('.zoom').evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(300);

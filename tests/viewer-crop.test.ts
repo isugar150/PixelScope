@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cropRectFromPoints, imagePointFromViewport, isCropRectWithinBounds } from '../src/viewer/crop';
+import { adjustCropRect, createInitialCropRect, cropRectFromPoints, imagePointFromViewport, isCropRectWithinBounds } from '../src/viewer/crop';
 
 describe('viewer crop coordinates', () => {
   it('normalizes reverse drag and clamps it to the image bounds', () => {
@@ -20,5 +20,18 @@ describe('viewer crop coordinates', () => {
     expect(isCropRectWithinBounds({ x: 100, y: 50, width: 600, height: 400 }, bounds)).toBe(true);
     expect(isCropRectWithinBounds({ x: 100, y: 50, width: 1101, height: 400 }, bounds)).toBe(false);
     expect(isCropRectWithinBounds({ x: 0.5, y: 0, width: 10, height: 10 }, bounds)).toBe(false);
+  });
+
+  it('creates a centered 100 by 100 crop selection by default', () => {
+    expect(createInitialCropRect({ width: 300, height: 200 })).toEqual({ x: 100, y: 50, width: 100, height: 100 });
+    expect(createInitialCropRect({ width: 80, height: 60 })).toEqual({ x: 0, y: 0, width: 80, height: 60 });
+  });
+
+  it('moves and resizes the crop selection while clamping it to the image', () => {
+    const bounds = { width: 300, height: 200 };
+    const initial = { x: 100, y: 50, width: 100, height: 100 };
+    expect(adjustCropRect(initial, 'move', { x: 180, y: -80 }, bounds)).toEqual({ x: 200, y: 0, width: 100, height: 100 });
+    expect(adjustCropRect(initial, 'se', { x: 40, y: 30 }, bounds)).toEqual({ x: 100, y: 50, width: 140, height: 130 });
+    expect(adjustCropRect(initial, 'nw', { x: -150, y: -80 }, bounds)).toEqual({ x: 0, y: 0, width: 200, height: 150 });
   });
 });

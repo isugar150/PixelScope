@@ -10,6 +10,44 @@ export interface CropSize {
 
 export interface CropRect extends CropPoint, CropSize {}
 
+export type CropHandle = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw';
+export type CropInteraction = 'move' | CropHandle;
+
+export function createInitialCropRect(bounds: CropSize, preferredSize = 100): CropRect {
+  const width = Math.max(1, Math.min(Math.floor(preferredSize), bounds.width));
+  const height = Math.max(1, Math.min(Math.floor(preferredSize), bounds.height));
+  return {
+    x: Math.floor((bounds.width - width) / 2),
+    y: Math.floor((bounds.height - height) / 2),
+    width,
+    height,
+  };
+}
+
+export function adjustCropRect(
+  rect: CropRect,
+  interaction: CropInteraction,
+  delta: CropPoint,
+  bounds: CropSize,
+): CropRect {
+  const deltaX = Math.round(delta.x), deltaY = Math.round(delta.y);
+  if (interaction === 'move') {
+    return {
+      x: clamp(rect.x + deltaX, 0, bounds.width - rect.width),
+      y: clamp(rect.y + deltaY, 0, bounds.height - rect.height),
+      width: rect.width,
+      height: rect.height,
+    };
+  }
+
+  let left = rect.x, top = rect.y, right = rect.x + rect.width, bottom = rect.y + rect.height;
+  if (interaction.includes('w')) left = clamp(rect.x + deltaX, 0, right - 1);
+  if (interaction.includes('e')) right = clamp(rect.x + rect.width + deltaX, left + 1, bounds.width);
+  if (interaction.includes('n')) top = clamp(rect.y + deltaY, 0, bottom - 1);
+  if (interaction.includes('s')) bottom = clamp(rect.y + rect.height + deltaY, top + 1, bounds.height);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
 export function cropRectFromPoints(start: CropPoint, end: CropPoint, bounds: CropSize): CropRect {
   const startX = clamp(start.x, 0, bounds.width);
   const startY = clamp(start.y, 0, bounds.height);

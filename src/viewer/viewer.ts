@@ -1,8 +1,8 @@
 import './viewer.css';
 import { deleteExpiredCaptures, getCapture } from '../capture/capture-store';
 import type { StoredCapture } from '../shared/capture';
-import { cropRectFromPoints, imagePointFromViewport, isCropRectWithinBounds } from './crop';
-import type { CropPoint, CropRect } from './crop';
+import { adjustCropRect, createInitialCropRect, imagePointFromViewport, isCropRectWithinBounds } from './crop';
+import type { CropHandle, CropInteraction, CropPoint, CropRect } from './crop';
 
 const captureId = new URLSearchParams(location.search).get('id');
 const title = requiredElement('title', HTMLHeadingElement);
@@ -41,7 +41,7 @@ let currentHeight = 0;
 let objectUrl: string | null = null;
 let zoom = 1;
 let cropRect: CropRect | null = null;
-let cropDrag: { readonly pointerId: number; readonly start: CropPoint; readonly previous: CropRect | null } | null = null;
+let cropDrag: { readonly pointerId: number; readonly start: CropPoint; readonly previous: CropRect; readonly interaction: CropInteraction } | null = null;
 let cropMode = false;
 let edited = false;
 let toastTimer: number | null = null;
@@ -125,7 +125,7 @@ function startCrop(): void {
   copyButton.disabled = true;
   downloadButton.disabled = true;
   resetCropButton.disabled = true;
-  setCropRect({ x: 0, y: 0, width: currentWidth, height: currentHeight }, true);
+  setCropRect(createInitialCropRect(imageBounds()), true);
   cropLayer.focus({ preventScroll: true });
 }
 
@@ -135,6 +135,7 @@ function cancelCrop(restoreFocus: boolean): void {
   cropMode = false;
   cropDrag = null;
   cropRect = null;
+  cropSelection.classList.remove('is-dragging');
   cropToolbar.hidden = true;
   cropLayer.hidden = true;
   cropButton.setAttribute('aria-pressed', 'false');
@@ -146,30 +147,35 @@ function cancelCrop(restoreFocus: boolean): void {
 }
 
 function beginCropDrag(event: PointerEvent): void {
-  if (!cropMode || event.button !== 0 || !event.isPrimary) return;
+  if (!cropMode || cropRect === null || event.button !== 0 || !event.isPrimary) return;
+  const interaction = getCropInteraction(event.target);
+  if (interaction === null) return;
   event.preventDefault();
   const start = pointerToImagePoint(event);
-  cropDrag = { pointerId: event.pointerId, start, previous: cropRect };
+  cropDrag = { pointerId: event.pointerId, start, previous: cropRect, interaction };
   cropLayer.setPointerCapture(event.pointerId);
-  setCropRect(cropRectFromPoints(start, start, imageBounds()), true);
+  cropSelection.classList.add('is-dragging');
 }
 
 function updateCropDrag(event: PointerEvent): void {
   if (cropDrag === null || event.pointerId !== cropDrag.pointerId) return;
   event.preventDefault();
-  setCropRect(cropRectFromPoints(cropDrag.start, pointerToImagePoint(event), imageBounds()), true);
+  const current = pointerToImagePoint(event);
+  setCropRect(adjustCropRect(
+    cropDrag.previous,
+    cropDrag.interaction,
+    { x: current.x - cropDrag.start.x, y: current.y - cropDrag.start.y },
+    imageBounds(),
+  ), true);
 }
 
 function endCropDrag(event: PointerEvent): void {
   if (cropDrag === null || event.pointerId !== cropDrag.pointerId) return;
   event.preventDefault();
-  const previous = cropDrag.previous;
   updateCropDrag(event);
   cropLayer.releasePointerCapture(event.pointerId);
   cropDrag = null;
-  if (cropRect === null || !isCropRectWithinBounds(cropRect, imageBounds())) {
-    setCropRect(previous ?? { x: 0, y: 0, width: currentWidth, height: currentHeight }, true);
-  }
+  cropSelection.classList.remove('is-dragging');
 }
 
 function cancelCropDrag(event: PointerEvent): void {
@@ -177,7 +183,19 @@ function cancelCropDrag(event: PointerEvent): void {
   const previous = cropDrag.previous;
   if (cropLayer.hasPointerCapture(event.pointerId)) cropLayer.releasePointerCapture(event.pointerId);
   cropDrag = null;
-  setCropRect(previous ?? { x: 0, y: 0, width: currentWidth, height: currentHeight }, true);
+  cropSelection.classList.remove('is-dragging');
+  setCropRect(previous, true);
+}
+
+function getCropInteraction(target: EventTarget | null): CropInteraction | null {
+  if (!(target instanceof Element) || !cropSelection.contains(target)) return null;
+  const handle = target.closest<HTMLElement>('[data-crop-handle]')?.dataset.cropHandle;
+  return isCropHandle(handle) ? handle : 'move';
+}
+
+function isCropHandle(value: string | undefined): value is CropHandle {
+  return value === 'n' || value === 'ne' || value === 'e' || value === 'se' ||
+    value === 's' || value === 'sw' || value === 'w' || value === 'nw';
 }
 
 function pointerToImagePoint(event: PointerEvent): CropPoint {
@@ -337,7 +355,19 @@ function handleKeydown(event: KeyboardEvent): void {
   } else if (event.key === 'Enter' && !cropApplyButton.disabled) {
     event.preventDefault();
     void applyCrop();
+  } else if (cropRect !== null && event.target === cropLayer && isArrowKey(event.key)) {
+    event.preventDefault();
+    const distance = event.shiftKey ? 10 : 1;
+    const delta = event.key === 'ArrowLeft' ? { x: -distance, y: 0 }
+      : event.key === 'ArrowRight' ? { x: distance, y: 0 }
+        : event.key === 'ArrowUp' ? { x: 0, y: -distance }
+          : { x: 0, y: distance };
+    setCropRect(adjustCropRect(cropRect, 'move', delta, imageBounds()), true);
   }
+}
+
+function isArrowKey(value: string): value is 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown' {
+  return value === 'ArrowLeft' || value === 'ArrowRight' || value === 'ArrowUp' || value === 'ArrowDown';
 }
 
 function imageBounds(): { readonly width: number; readonly height: number } {
