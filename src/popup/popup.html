@@ -24,7 +24,7 @@
             </button>
           </div>
           <div class="settings-panel" id="measure-options" aria-hidden="true" inert><div class="panel-inner">
-            <label for="measurement-unit"><span>측정 단위</span><select id="measurement-unit"><option value="px">픽셀 (px)</option><option value="rem">루트 글꼴 (rem)</option><option value="viewport">화면 비율 (vw/vh)</option></select></label>
+            <label class="setting-row" for="measurement-unit"><span>측정 단위</span><select id="measurement-unit"><option value="px">픽셀 (px)</option><option value="rem">루트 글꼴 (rem)</option><option value="viewport">화면 비율 (vw/vh)</option></select></label>
           </div></div>
         </article>
 
@@ -39,8 +39,20 @@
             </button>
           </div>
           <div class="settings-panel" id="color-options" aria-hidden="true" inert><div class="panel-inner">
-            <label for="color-picker-scope"><span>피커 범위</span><select id="color-picker-scope"><option value="screen">화면 전체</option><option value="page">웹페이지만</option></select></label>
-            <label for="copy-format"><span>복사 형식</span><select id="copy-format"><option value="hex">HEX</option><option value="rgb">RGB</option><option value="hsl">HSL</option></select></label>
+            <div class="setting-row scope-setting">
+              <span id="color-picker-scope-label">피커 범위</span>
+              <div class="scope-segmented" role="group" aria-labelledby="color-picker-scope-label">
+                <label class="scope-option">
+                  <input type="radio" name="color-picker-scope" value="screen">
+                  <span>화면 전체</span>
+                </label>
+                <label class="scope-option">
+                  <input type="radio" name="color-picker-scope" value="page">
+                  <span>웹페이지만</span>
+                </label>
+              </div>
+            </div>
+            <label class="setting-row" for="copy-format"><span>복사 형식</span><select id="copy-format"><option value="hex">HEX</option><option value="rgb">RGB</option><option value="hsl">HSL</option></select></label>
           </div></div>
         </article>
 

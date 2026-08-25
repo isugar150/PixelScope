@@ -1,7 +1,7 @@
 import './popup.css';
 import type { ExtensionMessage, ExtensionResponse } from '../shared/messages';
 import type { CaptureProgressState } from '../shared/capture';
-import { DEFAULT_SETTINGS, isColorPickerScope, isCopyFormat, isMeasurementUnit, type ActiveTool, type ToolMode } from '../shared/tool-state';
+import { DEFAULT_SETTINGS, isColorPickerScope, isCopyFormat, isMeasurementUnit, type ActiveTool, type ColorPickerScope, type ToolMode } from '../shared/tool-state';
 import { pickScreenColorInPage } from '../screen-color-picker';
 
 const COLOR_PICKER_SCOPE_VERSION = 1;
@@ -16,7 +16,7 @@ const captureStateCount = requiredElement('capture-state-count', HTMLOutputEleme
 const captureStateBar = requiredElement('capture-state-bar', HTMLElement);
 const errorText = requiredElement('error', HTMLParagraphElement);
 const copyFormat = requiredElement('copy-format', HTMLSelectElement);
-const colorPickerScope = requiredElement('color-picker-scope', HTMLSelectElement);
+const colorPickerScopes = requiredRadioGroup('color-picker-scope');
 const measurementUnit = requiredElement('measurement-unit', HTMLSelectElement);
 let tabId: number | null = null;
 let pollTimer: number | null = null;
@@ -35,12 +35,13 @@ async function initialize(): Promise<void> {
   });
   copyFormat.value = isCopyFormat(settings.copyFormat) ? settings.copyFormat : DEFAULT_SETTINGS.copyFormat;
   const migrateColorPickerScope = settings.colorPickerScopeVersion !== COLOR_PICKER_SCOPE_VERSION;
-  colorPickerScope.value = migrateColorPickerScope
+  const colorPickerScope = migrateColorPickerScope
     ? DEFAULT_SETTINGS.colorPickerScope
     : isColorPickerScope(settings.colorPickerScope) ? settings.colorPickerScope : DEFAULT_SETTINGS.colorPickerScope;
+  setColorPickerScope(colorPickerScope);
   measurementUnit.value = isMeasurementUnit(settings.measurementUnit) ? settings.measurementUnit : DEFAULT_SETTINGS.measurementUnit;
   if (migrateColorPickerScope) {
-    await chrome.storage.local.set({ colorPickerScope: colorPickerScope.value, colorPickerScopeVersion: COLOR_PICKER_SCOPE_VERSION });
+    await chrome.storage.local.set({ colorPickerScope, colorPickerScopeVersion: COLOR_PICKER_SCOPE_VERSION });
   }
   if (tabId === null) { showError('현재 탭을 확인할 수 없습니다.'); return; }
   const response = await send({ type: 'GET_TOOL_STATE', tabId });
@@ -53,13 +54,13 @@ for (const card of accordionCards) {
 for (const button of startButtons) {
   button.addEventListener('click', () => {
     const tool = button.dataset.tool;
-    if (tool === 'color-picker' && colorPickerScope.value === 'screen') { startScreenColorPicker(); return; }
+    if (tool === 'color-picker' && getColorPickerScope() === 'screen') { startScreenColorPicker(); return; }
     if (tool === 'measure' || tool === 'color-picker' || tool === 'capture-element' || tool === 'capture-page') void activate(tool);
   });
 }
 stopButton.addEventListener('click', () => void deactivate());
 copyFormat.addEventListener('change', () => void saveSettings());
-colorPickerScope.addEventListener('change', () => void saveSettings());
+for (const scope of colorPickerScopes) scope.addEventListener('change', () => void saveSettings());
 measurementUnit.addEventListener('change', () => void saveSettings());
 window.addEventListener('pagehide', stopPolling);
 
@@ -157,7 +158,7 @@ async function refreshState(): Promise<void> {
 async function saveSettings(): Promise<void> {
   await chrome.storage.local.set({
     copyFormat: copyFormat.value,
-    colorPickerScope: colorPickerScope.value,
+    colorPickerScope: getColorPickerScope(),
     colorPickerScopeVersion: COLOR_PICKER_SCOPE_VERSION,
     measurementUnit: measurementUnit.value,
   });
@@ -167,6 +168,18 @@ async function send(message: ExtensionMessage): Promise<ExtensionResponse> {
   catch (error: unknown) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
 }
 function showError(message: string): void { errorText.textContent = message; }
+function getColorPickerScope(): ColorPickerScope {
+  const selected = colorPickerScopes.find((scope) => scope.checked)?.value;
+  return isColorPickerScope(selected) ? selected : DEFAULT_SETTINGS.colorPickerScope;
+}
+function setColorPickerScope(value: ColorPickerScope): void {
+  for (const scope of colorPickerScopes) scope.checked = scope.value === value;
+}
+function requiredRadioGroup(name: string): HTMLInputElement[] {
+  const radios = Array.from(document.querySelectorAll<HTMLInputElement>(`input[type="radio"][name="${name}"]`));
+  if (radios.length === 0) throw new Error(`필수 라디오 그룹을 찾을 수 없습니다: ${name}`);
+  return radios;
+}
 function requiredElement<T extends HTMLElement>(id: string, constructor: { new(): T }): T {
   const element = document.getElementById(id);
   if (!(element instanceof constructor)) throw new Error(`필수 요소를 찾을 수 없습니다: ${id}`);

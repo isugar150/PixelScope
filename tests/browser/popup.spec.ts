@@ -53,8 +53,13 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await colorMore.click();
     await expect(measureMore).toHaveAttribute('aria-expanded', 'false');
     await expect(colorMore).toHaveAttribute('aria-expanded', 'true');
-    await expect(page.getByLabel('피커 범위')).toHaveValue('screen');
-    await page.getByLabel('피커 범위').selectOption('page');
+    const screenScope = page.getByRole('radio', { name: '화면 전체' });
+    const pageScope = page.getByRole('radio', { name: '웹페이지만' });
+    await expect(page.locator('select#color-picker-scope')).toHaveCount(0);
+    await expect(screenScope).toBeChecked();
+    await screenScope.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(pageScope).toBeChecked();
     await page.getByLabel('복사 형식').selectOption('rgb');
     await expect(page.getByText('화면 캡처', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /객체 캡처/ })).toBeVisible();
@@ -66,7 +71,8 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     expect(await page.evaluate(() => document.getElementById('color-options')?.closest('[data-tool-card]')?.getAttribute('data-tool-card'))).toBe('color-picker');
     await expect(page.getByText('복사 후 계속 선택', { exact: true })).toHaveCount(0);
     await page.reload();
-    await expect(page.getByLabel('피커 범위')).toHaveValue('page');
+    await page.locator('button[aria-controls="color-options"]').click();
+    await expect(page.getByRole('radio', { name: '웹페이지만' })).toBeChecked();
     await expect(page.getByLabel('복사 형식')).toHaveValue('rgb');
     await expect(page.getByLabel('측정 단위')).toHaveValue('rem');
     await page.evaluate(() => {
@@ -111,7 +117,8 @@ test('screen picker opens directly inside the trusted popup click', async () => 
       });
       Object.defineProperty(chrome.scripting, 'executeScript', { configurable: true, value: () => { throw new Error('screen picker must not be injected'); } });
     });
-    await expect(page.getByLabel('피커 범위')).toHaveValue('screen');
+    await page.locator('button[aria-controls="color-options"]').click();
+    await expect(page.getByRole('radio', { name: '화면 전체' })).toBeChecked();
     await page.getByRole('button', { name: '컬러 피커', exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as Window & { screenPickerUserActivation?: boolean }).screenPickerUserActivation)).toBe(true);
     await expect(page.locator('#error')).toHaveText('');
