@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCaptureTiles, intersectCaptureRect } from '../src/capture/tile-plan';
+import { createCaptureTiles, intersectCaptureRect, shouldSuppressViewportFixed } from '../src/capture/tile-plan';
 
 describe('capture tile planning', () => {
   it('covers a long page from top to bottom without gaps', () => {
@@ -38,5 +38,21 @@ describe('capture tile planning', () => {
       { x: 40, y: 500 },
     );
     expect(tiles.map((tile) => tile.position)).toEqual([{ x: 40, y: 700 }]);
+  });
+
+  it('suppresses viewport-fixed elements on every object tile but keeps the first page tile', () => {
+    expect(shouldSuppressViewportFixed({ x: 0, y: 500 }, 0)).toBe(true);
+    expect(shouldSuppressViewportFixed({ x: 0, y: 500 }, 1)).toBe(true);
+    expect(shouldSuppressViewportFixed(undefined, 0)).toBe(false);
+    expect(shouldSuppressViewportFixed(undefined, 1)).toBe(true);
+  });
+
+  it('starts an oversized object capture at the current viewport and then covers the remainder', () => {
+    const tiles = createCaptureTiles(
+      { left: 0, top: 0, width: 500, height: 2_000 },
+      { width: 500, height: 600 },
+      { x: 0, y: 500 },
+    );
+    expect(tiles.map((tile) => tile.position.y)).toEqual([500, 1_100, 1_400, 0]);
   });
 });

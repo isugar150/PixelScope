@@ -3,57 +3,70 @@
   <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PixelScope</title></head>
   <body>
     <main>
-      <header><div><h1>PixelScope</h1><p>도구를 바로 실행하거나 설정을 펼치세요</p></div><span id="status">대기</span></header>
+      <header class="app-header">
+        <img class="app-logo" src="/icons/icon-48.png" width="42" height="42" alt="">
+        <h1>PixelScope</h1>
+      </header>
+      <div class="ruler" aria-hidden="true"></div>
+      <section id="capture-state" class="capture-state" aria-live="polite" hidden>
+        <div><strong id="capture-state-label">캡처 페이지 계산 중</strong><output id="capture-state-count">준비 중</output></div>
+        <span class="capture-track" aria-hidden="true"><span id="capture-state-bar"></span></span>
+      </section>
       <section class="tools" aria-label="도구">
         <article class="tool-card" data-tool-card="measure" data-accordion>
           <div class="tool-row">
             <button class="tool-launch" data-tool="measure" type="button">
               <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7v10M20 7v10M4 12h16M8 9v6M12 9v6M16 9v6"/></svg></span>
-              <span class="summary-copy"><b>영역 측정</b><small>요소와 자유 영역의 크기 확인</small></span>
+              <b>영역 측정</b>
             </button>
             <button class="tool-more" type="button" aria-label="영역 측정 설정 열기" aria-expanded="false" aria-controls="measure-options">
               <svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"/></svg>
             </button>
           </div>
+          <div class="settings-panel" id="measure-options" aria-hidden="true" inert><div class="panel-inner">
+            <label for="measurement-unit"><span>측정 단위</span><select id="measurement-unit"><option value="px">픽셀 (px)</option><option value="rem">루트 글꼴 (rem)</option><option value="viewport">화면 비율 (vw/vh)</option></select></label>
+          </div></div>
         </article>
 
         <article class="tool-card" data-tool-card="color-picker" data-accordion>
           <div class="tool-row">
             <button class="tool-launch" data-tool="color-picker" type="button">
               <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 19 3-6 7-7 3 3-7 7-6 3ZM14 5l2-2 5 5-2 2-5-5Z"/></svg></span>
-              <span class="summary-copy"><b>컬러 피커</b><small>화면 픽셀의 색상 추출 및 복사</small></span>
+              <b>컬러 피커</b>
             </button>
             <button class="tool-more" type="button" aria-label="컬러 피커 설정 열기" aria-expanded="false" aria-controls="color-options">
               <svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"/></svg>
             </button>
           </div>
+          <div class="settings-panel" id="color-options" aria-hidden="true" inert><div class="panel-inner">
+            <label for="copy-format"><span>복사 형식</span><select id="copy-format"><option value="hex">HEX</option><option value="rgb">RGB</option><option value="hsl">HSL</option></select></label>
+          </div></div>
         </article>
 
         <article class="tool-card capture-card open" data-tool-card="capture">
           <div class="capture-head">
             <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7h3l1.4-2h5.2L16 7h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg></span>
-            <span class="summary-copy"><b>화면 캡처</b><small>객체 또는 페이지 전체를 PNG로 캡처</small></span>
+            <b>화면 캡처</b>
           </div>
           <div class="tool-panel"><div class="panel-inner">
             <div class="capture-actions">
-              <button class="start" data-tool="capture-element" type="button"><b>객체 캡처</b><small>요소를 선택해 캡처</small></button>
-              <button class="start" data-tool="capture-page" type="button"><b>전체 페이지</b><small>끝까지 이어서 캡처</small></button>
+              <button class="start" data-tool="capture-element" type="button">
+                <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M3.5 7V3.5H7M13 3.5h3.5V7M16.5 13v3.5H13M7 16.5H3.5V13"/></svg>
+                <b>객체 캡처</b>
+              </button>
+              <button class="start" data-tool="capture-page" type="button">
+                <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M5 2.5h10v15H5zM7.5 6h5M7.5 9h5M7.5 12h3"/></svg>
+                <b>전체 페이지</b>
+              </button>
             </div>
           </div></div>
         </article>
 
-        <button id="stop" class="stop" type="button" hidden><span aria-hidden="true">×</span><span><b>도구 종료</b><small>활성 도구와 오버레이 제거</small></span></button>
+        <button id="stop" class="stop" type="button" hidden>
+          <svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 6 8 8M14 6l-8 8"/></svg>
+          <b id="stop-label">도구 종료</b>
+        </button>
 
-        <section class="settings-stack" aria-label="도구 설정">
-          <div class="settings-panel" id="measure-options" aria-hidden="true" inert><div class="panel-inner">
-            <strong class="settings-title">영역 측정 설정</strong>
-            <label for="measurement-unit"><span>측정 단위</span><select id="measurement-unit"><option value="px">픽셀 (px)</option><option value="rem">루트 글꼴 (rem)</option><option value="viewport">화면 비율 (vw/vh)</option></select></label>
-          </div></div>
-          <div class="settings-panel" id="color-options" aria-hidden="true" inert><div class="panel-inner">
-            <strong class="settings-title">컬러 피커 설정</strong>
-            <label for="copy-format"><span>복사 형식</span><select id="copy-format"><option value="hex">HEX</option><option value="rgb">RGB</option><option value="hsl">HSL</option></select></label>
-          </div></div>
-        </section>
       </section>
       <p id="error" role="alert"></p>
     </main>

@@ -14,8 +14,11 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/src/popup/popup.html`);
     await expect(page.getByRole('heading', { name: 'PixelScope' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /영역 측정 요소와/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /컬러 피커 화면/ })).toBeVisible();
+    await expect(page.locator('.app-logo')).toHaveAttribute('src', '/icons/icon-48.png');
+    await expect(page.getByRole('button', { name: '영역 측정', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '컬러 피커', exact: true })).toBeVisible();
+    await expect(page.locator('#status')).toHaveCount(0);
+    await expect(page.locator('.summary-copy small, .capture-actions small')).toHaveCount(0);
     const measureMore = page.locator('button[aria-controls="measure-options"]');
     const colorMore = page.locator('button[aria-controls="color-options"]');
     await expect(measureMore.locator('path')).toHaveAttribute('d', 'm6 8 4 4 4-4');
@@ -24,6 +27,7 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.getByText('선택 영역의 너비와 높이에 적용됩니다.', { exact: true })).toHaveCount(0);
     await expect(page.getByText('색상을 복사한 뒤에도 피커는 계속 활성화됩니다.', { exact: true })).toHaveCount(0);
     await expect(measureMore).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('button', { name: '영역 측정', exact: true })).toHaveAttribute('aria-pressed', 'false');
     await measureMore.click();
     await expect(measureMore).toHaveAttribute('aria-expanded', 'true');
     await page.getByLabel('측정 단위').selectOption('rem');
@@ -34,16 +38,27 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.getByText('화면 캡처', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /객체 캡처/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /전체 페이지/ })).toBeVisible();
+    await expect(page.locator('#capture-state')).toBeHidden();
+    await expect(page.locator('#capture-state-label')).toHaveText('캡처 페이지 계산 중');
     await expect(page.locator('[data-tool-card="capture"] .tool-panel')).toHaveCSS('grid-template-rows', /\d+px/);
-    expect(await page.evaluate(() => {
-      const capture = document.querySelector('[data-tool-card="capture"]');
-      const settings = document.getElementById('color-options');
-      return capture !== null && settings !== null && (capture.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-    })).toBe(true);
+    expect(await page.evaluate(() => document.getElementById('measure-options')?.closest('[data-tool-card]')?.getAttribute('data-tool-card'))).toBe('measure');
+    expect(await page.evaluate(() => document.getElementById('color-options')?.closest('[data-tool-card]')?.getAttribute('data-tool-card'))).toBe('color-picker');
     await expect(page.getByText('복사 후 계속 선택', { exact: true })).toHaveCount(0);
     await page.reload();
     await expect(page.getByLabel('복사 형식')).toHaveValue('rgb');
     await expect(page.getByLabel('측정 단위')).toHaveValue('rem');
+    await page.evaluate(() => {
+      document.body.classList.add('capture-running');
+      const captureState = document.getElementById('capture-state');
+      const stop = document.getElementById('stop');
+      if (captureState !== null) captureState.hidden = false;
+      if (stop !== null) stop.hidden = false;
+    });
+    await expect(page.locator('#capture-state')).toBeVisible();
+    await expect(page.locator('#stop')).toBeVisible();
+    await expect(page.locator('[data-tool-card="measure"]')).toBeHidden();
+    await expect(page.locator('[data-tool-card="color-picker"]')).toBeHidden();
+    await expect(page.locator('[data-tool-card="capture"]')).toBeHidden();
     await page.keyboard.press('Tab');
     await expect(page.locator(':focus')).toBeVisible();
   } finally { await context.close(); }
@@ -81,12 +96,115 @@ test('capture viewer loads ephemeral PNG and exposes zoom and export actions', a
     await page.goto(`chrome-extension://${extensionId}/src/viewer/viewer.html?id=viewer-test`);
     await expect(page.getByRole('heading', { name: 'Viewer test' })).toBeVisible();
     await expect(page.getByAltText('캡처 결과')).toBeVisible();
+    await expect(page.getByText('캡처 이미지를 준비하고 있습니다', { exact: true })).toBeHidden();
     await expect(page.getByRole('button', { name: '축소' })).toBeVisible();
     await expect(page.getByRole('button', { name: '확대' })).toBeVisible();
     await expect(page.getByRole('button', { name: '클립보드 복사' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'PNG 저장' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Chrome 저장' })).toBeVisible();
+    expect(await page.evaluate(() => chrome.runtime.getManifest().permissions?.includes('downloads'))).toBe(true);
     await page.getByRole('button', { name: '확대' }).click();
     await expect(page.locator('#zoom-value')).not.toHaveText('100%');
+  } finally { await context.close(); }
+});
+
+test('object capture suppresses a fixed header and restores page styles', async () => {
+  const extensionPath = resolve(import.meta.dirname, '../../dist');
+  const context = await chromium.launchPersistentContext('', {
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    const page = await context.newPage();
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.setContent(`<style>::-webkit-scrollbar{width:20px;height:20px}#header{position:fixed;inset:0 0 auto;height:60px;visibility:visible!important;background:white;z-index:9997}#floating{position:fixed;right:16px;bottom:16px;width:64px;height:64px;background:blue;z-index:9998}#absolute{position:absolute;top:90px;right:10px;width:80px;height:40px;background:red}#target{margin-top:80px;width:760px;height:1400px;background:linear-gradient(#123,#def)}</style><header id="header">Header</header><aside id="floating">Chat</aside><div id="shadow-widget"></div><aside id="absolute">Absolute</aside><div id="target">Target</div>`);
+    await page.evaluate(() => {
+      const shadowHost = document.getElementById('shadow-widget');
+      const shadowRoot = shadowHost?.attachShadow({ mode: 'open' });
+      const shadowButton = document.createElement('button');
+      shadowButton.id = 'shadow-floating';
+      shadowButton.textContent = 'Help';
+      shadowButton.style.cssText = 'position:fixed;right:16px;bottom:96px;width:64px;height:64px';
+      shadowRoot?.append(shadowButton);
+      const testWindow = window as Window & {
+        captureListener?: (...args: unknown[]) => unknown;
+        captureRequested?: boolean;
+        captureRequest?: { viewport?: { width?: number }; screenshotViewport?: { width?: number } };
+        resolveCapture?: (response: { ok: false; error: string }) => void;
+      };
+      Object.defineProperty(window.chrome, 'runtime', { configurable: true, value: {
+        onMessage: {
+          addListener: (listener: (...args: unknown[]) => unknown) => { testWindow.captureListener = listener; },
+          removeListener: () => undefined,
+        },
+        sendMessage: (message: { type?: string; viewport?: { width?: number }; screenshotViewport?: { width?: number } }) => {
+          if (message.type !== 'CAPTURE_DOCUMENT') return Promise.resolve({ ok: true });
+          testWindow.captureRequested = true;
+          testWindow.captureRequest = message;
+          return new Promise((resolveCapture) => { testWindow.resolveCapture = resolveCapture; });
+        },
+      } });
+      Object.defineProperty(window.chrome, 'storage', { configurable: true, value: { local: { get: () => Promise.resolve({}) } } });
+    });
+    await page.addScriptTag({ path: resolve(extensionPath, 'content.js') });
+    await page.evaluate(async () => {
+      const listener = (window as Window & { captureListener?: (...args: unknown[]) => unknown }).captureListener;
+      await new Promise<void>((resolveActivation) => listener?.({ type: 'TOOL_COMMAND', tool: 'capture-element' }, {}, () => resolveActivation()));
+    });
+    await page.mouse.move(300, 200);
+    await page.mouse.click(300, 200);
+    await expect.poll(() => page.evaluate(() => (window as Window & { captureRequested?: boolean }).captureRequested)).toBe(true);
+    await expect.poll(() => page.evaluate(() => {
+      const request = (window as Window & { captureRequest?: { viewport?: { width?: number }; screenshotViewport?: { width?: number } } }).captureRequest;
+      return (request?.screenshotViewport?.width ?? 0) - (request?.viewport?.width ?? 0);
+    })).toBe(20);
+    await page.evaluate(async () => {
+      const listener = (window as Window & { captureListener?: (...args: unknown[]) => unknown }).captureListener;
+      await new Promise<void>((resolveScroll) => listener?.(
+        { type: 'CAPTURE_SCROLL_TO', position: { x: 0, y: 0 }, suppressViewportFixed: false },
+        {},
+        () => resolveScroll(),
+      ));
+    });
+    await expect(page.locator('#header')).toHaveCSS('visibility', 'visible');
+    await expect(page.locator('#floating')).toHaveCSS('visibility', 'visible');
+    await expect.poll(() => page.locator('#shadow-widget').evaluate((element) => {
+      const button = element.shadowRoot?.getElementById('shadow-floating');
+      return button instanceof HTMLElement ? getComputedStyle(button).visibility : null;
+    })).toBe('visible');
+    await page.evaluate(async () => {
+      const listener = (window as Window & { captureListener?: (...args: unknown[]) => unknown }).captureListener;
+      await new Promise<void>((resolveScroll) => listener?.(
+        { type: 'CAPTURE_SCROLL_TO', position: { x: 0, y: 600 }, suppressViewportFixed: true },
+        {},
+        () => resolveScroll(),
+      ));
+    });
+    await expect(page.locator('#header')).toHaveCSS('visibility', 'hidden');
+    await expect(page.locator('#header')).toHaveAttribute('data-pixelscope-capture-fixed', '');
+    await expect(page.locator('#floating')).toHaveCSS('visibility', 'hidden');
+    await expect(page.locator('#floating')).toHaveAttribute('data-pixelscope-capture-fixed', '');
+    await expect(page.locator('#shadow-widget')).toHaveCSS('visibility', 'visible');
+    await expect(page.locator('#shadow-widget')).not.toHaveAttribute('data-pixelscope-capture-fixed');
+    await expect.poll(() => page.locator('#shadow-widget').evaluate((element) => {
+      const button = element.shadowRoot?.getElementById('shadow-floating');
+      return button instanceof HTMLElement ? getComputedStyle(button).visibility : null;
+    })).toBe('hidden');
+    await expect(page.locator('#absolute')).toHaveCSS('visibility', 'visible');
+    await expect(page.locator('#absolute')).not.toHaveAttribute('data-pixelscope-capture-fixed');
+    await expect(page.locator('[data-pixelscope-capture-preparation]')).toHaveCount(1);
+    await page.evaluate(() => {
+      (window as Window & { resolveCapture?: (response: { ok: false; error: string }) => void }).resolveCapture?.({ ok: false, error: 'test capture finished' });
+    });
+    await expect(page.locator('#header')).toHaveCSS('visibility', 'visible');
+    await expect(page.locator('#header')).not.toHaveAttribute('data-pixelscope-capture-fixed');
+    await expect(page.locator('#floating')).toHaveCSS('visibility', 'visible');
+    await expect(page.locator('#floating')).not.toHaveAttribute('data-pixelscope-capture-fixed');
+    await expect.poll(() => page.locator('#shadow-widget').evaluate((element) => {
+      const button = element.shadowRoot?.getElementById('shadow-floating');
+      return button instanceof HTMLElement ? getComputedStyle(button).visibility : null;
+    })).toBe('visible');
+    await expect(page.locator('[data-pixelscope-capture-preparation]')).toHaveCount(0);
   } finally { await context.close(); }
 });
 

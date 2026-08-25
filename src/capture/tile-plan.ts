@@ -4,6 +4,10 @@ export interface CaptureTile {
   readonly position: CaptureScrollPosition;
 }
 
+export function shouldSuppressViewportFixed(preferredPosition: CaptureScrollPosition | undefined, tileIndex: number): boolean {
+  return preferredPosition === undefined ? tileIndex > 0 : true;
+}
+
 export function createCaptureTiles(rect: CaptureRect, viewport: CaptureViewportSize, preferredPosition?: CaptureScrollPosition): CaptureTile[] {
   if (rect.width <= 0 || rect.height <= 0 || viewport.width <= 0 || viewport.height <= 0) return [];
   const xs = axisPositions(rect.left, rect.left + rect.width, viewport.width, preferredPosition?.x);
@@ -24,6 +28,23 @@ function axisPositions(start: number, end: number, viewportLength: number, prefe
     const minimum = Math.max(0, end - viewportLength);
     const maximum = Math.max(minimum, start);
     return [Math.min(maximum, Math.max(minimum, preferred))];
+  }
+  if (preferred !== undefined) {
+    const first = Math.min(Math.max(0, end - viewportLength), Math.max(Math.max(0, start), preferred));
+    const positions = [first];
+    let position = first;
+    while (position + viewportLength < end) {
+      position = Math.min(position + viewportLength, end - viewportLength);
+      if (positions.includes(position)) break;
+      positions.push(position);
+    }
+    position = first;
+    while (position > start) {
+      position = Math.max(Math.max(0, start), position - viewportLength);
+      if (positions.includes(position)) break;
+      positions.push(position);
+    }
+    return positions;
   }
   const positions: number[] = [];
   let position = Math.max(0, start);

@@ -1,16 +1,23 @@
 import './popup.css';
 import type { ExtensionMessage, ExtensionResponse } from '../shared/messages';
+import type { CaptureProgressState } from '../shared/capture';
 import { DEFAULT_SETTINGS, isCopyFormat, isMeasurementUnit, type ActiveTool, type ToolMode } from '../shared/tool-state';
 
 const accordionCards = Array.from(document.querySelectorAll<HTMLElement>('[data-accordion]'));
 const toolCards = Array.from(document.querySelectorAll<HTMLElement>('[data-tool-card]'));
 const startButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-tool]'));
 const stopButton = requiredElement('stop', HTMLButtonElement);
-const status = requiredElement('status', HTMLSpanElement);
+const stopLabel = requiredElement('stop-label', HTMLElement);
+const captureState = requiredElement('capture-state', HTMLElement);
+const captureStateLabel = requiredElement('capture-state-label', HTMLElement);
+const captureStateCount = requiredElement('capture-state-count', HTMLOutputElement);
+const captureStateBar = requiredElement('capture-state-bar', HTMLElement);
 const errorText = requiredElement('error', HTMLParagraphElement);
 const copyFormat = requiredElement('copy-format', HTMLSelectElement);
 const measurementUnit = requiredElement('measurement-unit', HTMLSelectElement);
 let tabId: number | null = null;
+let pollTimer: number | null = null;
+let lastCaptureProgress: CaptureProgressState | undefined;
 
 void initialize();
 
@@ -25,7 +32,7 @@ async function initialize(): Promise<void> {
   measurementUnit.value = isMeasurementUnit(settings.measurementUnit) ? settings.measurementUnit : DEFAULT_SETTINGS.measurementUnit;
   if (tabId === null) { showError('현재 탭을 확인할 수 없습니다.'); return; }
   const response = await send({ type: 'GET_TOOL_STATE', tabId });
-  if (response.ok) renderState(response.tool ?? 'idle'); else showError(response.error);
+  if (response.ok) renderState(response.tool ?? 'idle', response.captureProgress); else showError(response.error);
 }
 
 for (const card of accordionCards) {
@@ -40,6 +47,7 @@ for (const button of startButtons) {
 stopButton.addEventListener('click', () => void deactivate());
 copyFormat.addEventListener('change', () => void saveSettings());
 measurementUnit.addEventListener('change', () => void saveSettings());
+window.addEventListener('pagehide', stopPolling);
 
 function toggleAccordion(selected: HTMLElement): void {
   const open = !selected.classList.contains('open');
@@ -58,23 +66,64 @@ function setAccordionOpen(card: HTMLElement, open: boolean): void {
 }
 async function activate(tool: ActiveTool): Promise<void> {
   if (tabId === null) return;
+  if (tool === 'capture-element' || tool === 'capture-page') lastCaptureProgress = undefined;
   await saveSettings();
   const response = await send({ type: 'ACTIVATE_TOOL', tabId, tool });
   if (!response.ok) { showError(response.error); return; }
-  window.close();
+  if (tool === 'capture-page') renderState(tool, response.captureProgress);
+  else window.close();
 }
 async function deactivate(): Promise<void> {
   if (tabId === null) return;
   const response = await send({ type: 'DEACTIVATE_TOOL', tabId });
   if (response.ok) renderState('idle'); else showError(response.error);
 }
-function renderState(tool: ToolMode): void {
-  status.textContent = tool === 'idle' ? '대기' : tool === 'measure' ? '영역 측정 중' : tool === 'color-picker' ? '컬러 피커 중' : '캡처 중';
+function renderState(tool: ToolMode, captureProgress?: CaptureProgressState): void {
+  const capturing = tool === 'capture-element' || tool === 'capture-page';
+  if (!capturing) lastCaptureProgress = undefined;
+  else if (captureProgress !== undefined) lastCaptureProgress = captureProgress;
+  document.body.classList.toggle('capture-running', capturing);
   stopButton.hidden = tool === 'idle';
+  stopLabel.textContent = capturing ? '캡처 중지' : '도구 종료';
+  captureState.hidden = !capturing;
+  renderCaptureProgress(capturing, captureProgress ?? lastCaptureProgress);
   for (const card of toolCards) {
     const active = card.dataset.toolCard === tool || (card.dataset.toolCard === 'capture' && (tool === 'capture-element' || tool === 'capture-page'));
     card.classList.toggle('active', active);
+    if (card.dataset.toolCard === 'capture') card.classList.toggle('capturing', capturing);
   }
+  for (const button of startButtons) if (button.dataset.tool?.startsWith('capture-') === true) button.disabled = capturing;
+  for (const button of startButtons) button.setAttribute('aria-pressed', String(button.dataset.tool === tool));
+  if (capturing) startPolling(); else stopPolling();
+}
+function renderCaptureProgress(capturing: boolean, progress?: CaptureProgressState): void {
+  if (!capturing) return;
+  if (progress === undefined) {
+    captureStateLabel.textContent = '캡처 페이지 계산 중'; captureStateCount.value = '준비 중'; captureStateBar.style.width = '0%';
+    return;
+  }
+  const compositing = progress.phase === 'compositing';
+  const percentage = Math.round(progress.completed / Math.max(1, progress.total) * 100);
+  captureStateLabel.textContent = compositing
+    ? `총 ${String(progress.total)}페이지 캡처 완료`
+    : progress.completed === 0
+      ? `총 ${String(progress.total)}페이지 캡처 준비 중`
+      : `총 ${String(progress.total)}페이지 중 ${String(progress.completed)}페이지 캡처 중`;
+  captureStateCount.value = compositing ? 'PNG 합성 중' : `${String(percentage)}%`;
+  captureStateBar.style.width = `${String(compositing ? 100 : percentage)}%`;
+}
+function startPolling(): void {
+  if (pollTimer !== null) return;
+  pollTimer = window.setInterval(() => void refreshState(), 350);
+}
+function stopPolling(): void {
+  if (pollTimer === null) return;
+  window.clearInterval(pollTimer); pollTimer = null;
+}
+async function refreshState(): Promise<void> {
+  if (tabId === null) return;
+  const response = await send({ type: 'GET_TOOL_STATE', tabId });
+  if (response.ok) renderState(response.tool ?? 'idle', response.captureProgress);
 }
 async function saveSettings(): Promise<void> {
   await chrome.storage.local.set({ copyFormat: copyFormat.value, measurementUnit: measurementUnit.value });

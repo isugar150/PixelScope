@@ -20,7 +20,7 @@ export class CaptureOverlay {
     this.#box.className = 'box'; this.#label.className = 'label'; this.#progress.className = 'progress';
     const header = document.createElement('div'); header.className = 'progress-head';
     const dot = document.createElement('i'); dot.setAttribute('aria-hidden', 'true');
-    this.#status.textContent = '페이지 캡처 중'; this.#count.textContent = '준비 중';
+    this.#status.textContent = '캡처 페이지 계산 중'; this.#count.textContent = '준비 중';
     header.append(dot, this.#status, this.#count);
     const track = document.createElement('span'); track.className = 'track'; this.#bar.className = 'bar'; track.append(this.#bar);
     this.#detail.className = 'detail'; this.#detail.textContent = '캡처할 화면을 준비하고 있습니다.';
@@ -42,14 +42,21 @@ export class CaptureOverlay {
   }
   public showPreparing(rect: CaptureRect): void {
     this.#box.style.display = 'none'; this.#label.style.display = 'none';
-    this.#progress.style.display = 'block'; this.#status.textContent = '페이지 캡처 중'; this.#count.textContent = '준비 중';
+    this.#progress.style.display = 'block'; this.#status.textContent = '캡처 페이지 계산 중'; this.#count.textContent = '준비 중';
     this.#bar.style.width = '0%'; this.#detail.textContent = `${String(Math.round(rect.width))} × ${String(Math.round(rect.height))} px`;
+  }
+  public updatePreparingSize(rect: CaptureRect): void {
+    this.#detail.textContent = `${String(Math.round(rect.width))} × ${String(Math.round(rect.height))} px`;
   }
   public showProgress(completed: number, total: number): void {
     this.#host.style.visibility = 'visible'; this.#progress.style.display = 'block';
-    this.#count.textContent = `${String(completed)} / ${String(total)}`;
-    this.#bar.style.width = `${String(Math.round(completed / Math.max(total, 1) * 100))}%`;
-    this.#detail.textContent = completed === total ? 'PNG 이미지를 합성하고 있습니다.' : '페이지를 이동하며 화면을 캡처하고 있습니다.';
+    const percentage = Math.round(completed / Math.max(total, 1) * 100);
+    this.#status.textContent = completed === total
+      ? `총 ${String(total)}페이지 캡처 완료`
+      : `총 ${String(total)}페이지 중 ${String(completed)}페이지 캡처 중`;
+    this.#count.textContent = `${String(percentage)}%`;
+    this.#bar.style.width = `${String(percentage)}%`;
+    this.#detail.textContent = completed === total ? 'PNG 이미지를 합성하고 있습니다.' : '다음 페이지를 준비하고 있습니다.';
   }
   public showError(message: string): void {
     this.#host.style.visibility = 'visible'; this.#progress.style.display = 'block'; this.#progress.classList.add('error');

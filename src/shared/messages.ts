@@ -1,20 +1,20 @@
 import type { ActiveTool, ToolMode } from './tool-state';
-import type { CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './capture';
+import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './capture';
 
 export type ExtensionMessage =
   | { readonly type: 'GET_TOOL_STATE'; readonly tabId?: number }
   | { readonly type: 'ACTIVATE_TOOL'; readonly tabId: number; readonly tool: ActiveTool }
   | { readonly type: 'DEACTIVATE_TOOL'; readonly tabId: number }
   | { readonly type: 'CAPTURE_VISIBLE_TAB' }
-  | { readonly type: 'CAPTURE_DOCUMENT'; readonly rect: CaptureRect; readonly viewport: CaptureViewportSize; readonly title: string; readonly preferredPosition?: CaptureScrollPosition }
-  | { readonly type: 'CAPTURE_SCROLL_TO'; readonly position: CaptureScrollPosition }
+  | { readonly type: 'CAPTURE_DOCUMENT'; readonly rect: CaptureRect; readonly viewport: CaptureViewportSize; readonly screenshotViewport: CaptureViewportSize; readonly title: string; readonly preferredPosition?: CaptureScrollPosition }
+  | { readonly type: 'CAPTURE_SCROLL_TO'; readonly position: CaptureScrollPosition; readonly suppressViewportFixed: boolean }
   | { readonly type: 'CAPTURE_PROGRESS'; readonly completed: number; readonly total: number }
   | { readonly type: 'CAPTURE_CANCEL' }
   | { readonly type: 'TOOL_COMMAND'; readonly tool: ToolMode }
   | { readonly type: 'TOOL_STATE_CHANGED'; readonly tool: ToolMode };
 
 export type ExtensionResponse =
-  | { readonly ok: true; readonly tool?: ToolMode; readonly dataUrl?: string; readonly captureId?: string; readonly position?: CaptureScrollPosition }
+  | { readonly ok: true; readonly tool?: ToolMode; readonly dataUrl?: string; readonly captureId?: string; readonly position?: CaptureScrollPosition; readonly captureProgress?: CaptureProgressState }
   | { readonly ok: false; readonly error: string };
 
 export function isExtensionMessage(value: unknown): value is ExtensionMessage {
@@ -30,9 +30,9 @@ export function isExtensionMessage(value: unknown): value is ExtensionMessage {
     case 'TOOL_STATE_CHANGED':
       return 'tool' in value && isTool(value.tool, true);
     case 'CAPTURE_DOCUMENT':
-      return hasCaptureRect(value, 'rect') && hasSize(value, 'viewport') && 'title' in value && typeof value.title === 'string'
+      return hasCaptureRect(value, 'rect') && hasSize(value, 'viewport') && hasSize(value, 'screenshotViewport') && 'title' in value && typeof value.title === 'string'
         && (!('preferredPosition' in value) || hasPoint(value, 'preferredPosition'));
-    case 'CAPTURE_SCROLL_TO': return hasPoint(value, 'position');
+    case 'CAPTURE_SCROLL_TO': return hasPoint(value, 'position') && 'suppressViewportFixed' in value && typeof value.suppressViewportFixed === 'boolean';
     case 'CAPTURE_PROGRESS': return hasNumber(value, 'completed') && hasNumber(value, 'total');
     default: return false;
   }

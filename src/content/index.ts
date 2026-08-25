@@ -42,11 +42,11 @@ let captureController: CaptureController | null = null;
 const onMessage = (message: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: ExtensionResponse) => void): boolean => {
   if (!isContentMessage(message)) return false;
   if (message.type === 'GET_TOOL_STATE') {
-    sendResponse({ ok: true, tool: controller.mode });
+    sendResponse({ ok: true, tool: controller.mode, captureProgress: captureController?.progress });
     return false;
   }
   if (message.type === 'CAPTURE_SCROLL_TO') {
-    void captureController?.prepareViewport(message.position)
+    void captureController?.prepareViewport(message.position, message.suppressViewportFixed)
       .then((position) => sendResponse({ ok: true, position }))
       .catch((error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
     return true;
@@ -87,13 +87,14 @@ function notifyState(tool: ToolMode): void {
 function isContentMessage(value: unknown): value is
   | { type: 'GET_TOOL_STATE' }
   | { type: 'TOOL_COMMAND'; tool: ToolMode }
-  | { type: 'CAPTURE_SCROLL_TO'; position: { x: number; y: number } }
+  | { type: 'CAPTURE_SCROLL_TO'; position: { x: number; y: number }; suppressViewportFixed: boolean }
   | { type: 'CAPTURE_PROGRESS'; completed: number; total: number } {
   if (typeof value !== 'object' || value === null || !('type' in value)) return false;
   if (value.type === 'GET_TOOL_STATE') return true;
   if (value.type === 'TOOL_COMMAND' && 'tool' in value) return isToolMode(value.tool);
   if (value.type === 'CAPTURE_SCROLL_TO' && 'position' in value && typeof value.position === 'object' && value.position !== null) {
-    return 'x' in value.position && typeof value.position.x === 'number' && 'y' in value.position && typeof value.position.y === 'number';
+    return 'x' in value.position && typeof value.position.x === 'number' && 'y' in value.position && typeof value.position.y === 'number'
+      && 'suppressViewportFixed' in value && typeof value.suppressViewportFixed === 'boolean';
   }
   return value.type === 'CAPTURE_PROGRESS' && 'completed' in value && typeof value.completed === 'number' && 'total' in value && typeof value.total === 'number';
 }
@@ -103,6 +104,6 @@ function isToolMode(value: unknown): value is ToolMode {
 }
 
 function removeStaleArtifacts(): void {
-  for (const element of document.querySelectorAll('[data-pixelscope-overlay], [data-pixelscope-interaction]')) element.remove();
+  for (const element of document.querySelectorAll('[data-pixelscope-overlay], [data-pixelscope-interaction], [data-pixelscope-capture-preparation]')) element.remove();
   document.documentElement.removeAttribute('data-pixelscope-touch-drag');
 }

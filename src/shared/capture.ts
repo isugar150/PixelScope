@@ -15,6 +15,12 @@ export interface CaptureScrollPosition {
   readonly y: number;
 }
 
+export interface CaptureProgressState {
+  readonly phase: 'capturing' | 'compositing';
+  readonly completed: number;
+  readonly total: number;
+}
+
 export interface StoredCapture {
   readonly id: string;
   readonly blob: Blob;

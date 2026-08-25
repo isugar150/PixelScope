@@ -1,7 +1,7 @@
 import { deleteCapture, deleteExpiredCaptures, saveCapture } from './capture/capture-store';
-import { createCaptureTiles, intersectCaptureRect } from './capture/tile-plan';
+import { createCaptureTiles, intersectCaptureRect, shouldSuppressViewportFixed } from './capture/tile-plan';
 import { isExtensionMessage, type ExtensionMessage, type ExtensionResponse } from './shared/messages';
-import type { CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './shared/capture';
+import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './shared/capture';
 import type { ToolMode } from './shared/tool-state';
 
 const CONTENT_SCRIPT = 'content.js';
@@ -10,6 +10,7 @@ const MAX_CANVAS_DIMENSION = 32_767;
 const MAX_CANVAS_PIXELS = 268_000_000;
 const tabStates = new Map<number, ToolMode>();
 const captureAbortControllers = new Map<number, AbortController>();
+const captureProgressStates = new Map<number, CaptureProgressState>();
 const viewerCaptures = new Map<number, string>();
 
 void deleteExpiredCaptures().catch(() => undefined);
@@ -26,6 +27,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   tabStates.delete(tabId);
   captureAbortControllers.get(tabId)?.abort();
   captureAbortControllers.delete(tabId);
+  captureProgressStates.delete(tabId);
   const captureId = viewerCaptures.get(tabId);
   if (captureId !== undefined) {
     viewerCaptures.delete(tabId);
@@ -33,26 +35,34 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === 'loading') tabStates.delete(tabId);
+  if (changeInfo.status === 'loading') {
+    tabStates.delete(tabId); captureProgressStates.delete(tabId);
+    void setCaptureBadge(tabId, 'idle').catch(() => undefined);
+  }
 });
 
 async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.MessageSender): Promise<ExtensionResponse> {
   switch (message.type) {
     case 'GET_TOOL_STATE': {
       if (message.tabId === undefined) return { ok: true, tool: 'idle' };
-      const tool = await queryContentState(message.tabId);
+      const cachedTool = tabStates.get(message.tabId);
+      const contentState = await queryContentState(message.tabId);
+      const tool = cachedTool === 'capture-element' || cachedTool === 'capture-page' ? cachedTool : contentState.tool;
       tabStates.set(message.tabId, tool);
-      return { ok: true, tool };
+      return { ok: true, tool, captureProgress: captureProgressStates.get(message.tabId) ?? contentState.captureProgress };
     }
     case 'ACTIVATE_TOOL':
       await ensureContentScript(message.tabId);
       await sendToolCommand(message.tabId, message.tool);
       tabStates.set(message.tabId, message.tool);
+      void setCaptureBadge(message.tabId, message.tool).catch(() => undefined);
       return { ok: true, tool: message.tool };
     case 'DEACTIVATE_TOOL':
       captureAbortControllers.get(message.tabId)?.abort();
+      captureProgressStates.delete(message.tabId);
       await sendToolCommand(message.tabId, 'idle');
       tabStates.set(message.tabId, 'idle');
+      void setCaptureBadge(message.tabId, 'idle').catch(() => undefined);
       return { ok: true, tool: 'idle' };
     case 'CAPTURE_VISIBLE_TAB': {
       if (sender.tab?.windowId === undefined) return { ok: false, error: '캡처할 탭을 확인할 수 없습니다.' };
@@ -61,14 +71,17 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
     }
     case 'CAPTURE_DOCUMENT': {
       if (sender.tab?.id === undefined) return { ok: false, error: '캡처할 탭을 확인할 수 없습니다.' };
-      const captureId = await captureDocument(sender.tab.id, sender.tab.windowId, message.rect, message.viewport, message.title, message.preferredPosition);
+      const captureId = await captureDocument(sender.tab.id, sender.tab.windowId, message.rect, message.viewport, message.screenshotViewport, message.title, message.preferredPosition);
       return { ok: true, captureId };
     }
     case 'CAPTURE_CANCEL':
       if (sender.tab?.id !== undefined) captureAbortControllers.get(sender.tab.id)?.abort();
       return { ok: true };
     case 'TOOL_STATE_CHANGED':
-      if (sender.tab?.id !== undefined) tabStates.set(sender.tab.id, message.tool);
+      if (sender.tab?.id !== undefined) {
+        tabStates.set(sender.tab.id, message.tool);
+        void setCaptureBadge(sender.tab.id, message.tool).catch(() => undefined);
+      }
       return { ok: true, tool: message.tool };
     case 'TOOL_COMMAND':
     case 'CAPTURE_SCROLL_TO':
@@ -76,12 +89,13 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
   }
 }
 
-async function captureDocument(tabId: number, windowId: number, rect: CaptureRect, viewport: CaptureViewportSize, title: string, preferredPosition?: CaptureScrollPosition): Promise<string> {
+async function captureDocument(tabId: number, windowId: number, rect: CaptureRect, viewport: CaptureViewportSize, screenshotViewport: CaptureViewportSize, title: string, preferredPosition?: CaptureScrollPosition): Promise<string> {
   captureAbortControllers.get(tabId)?.abort();
   const abortController = new AbortController();
   captureAbortControllers.set(tabId, abortController);
   const tiles = createCaptureTiles(rect, viewport, preferredPosition);
   if (tiles.length === 0) throw new Error('캡처할 영역의 크기가 올바르지 않습니다.');
+  captureProgressStates.set(tabId, { phase: 'capturing', completed: 0, total: tiles.length });
 
   let canvas: OffscreenCanvas | null = null;
   let context: OffscreenCanvasRenderingContext2D | null = null;
@@ -90,16 +104,28 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
   try {
     for (const [index, tile] of tiles.entries()) {
       throwIfAborted(abortController.signal);
-      const scrollResponse = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, { type: 'CAPTURE_SCROLL_TO', position: tile.position });
+      let scrollResponse = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, {
+        type: 'CAPTURE_SCROLL_TO',
+        position: tile.position,
+        suppressViewportFixed: shouldSuppressViewportFixed(preferredPosition, index),
+      });
       if (!scrollResponse.ok || scrollResponse.position === undefined) throw new Error(scrollResponse.ok ? '페이지 스크롤 위치를 확인할 수 없습니다.' : scrollResponse.error);
       if (index > 0) await delay(CAPTURE_INTERVAL_MS, abortController.signal);
+      if (shouldSuppressViewportFixed(preferredPosition, index)) {
+        scrollResponse = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, {
+          type: 'CAPTURE_SCROLL_TO',
+          position: scrollResponse.position,
+          suppressViewportFixed: true,
+        });
+        if (!scrollResponse.ok || scrollResponse.position === undefined) throw new Error(scrollResponse.ok ? '페이지 스크롤 위치를 확인할 수 없습니다.' : scrollResponse.error);
+      }
       await assertCaptureTabActive(tabId, windowId);
       const dataUrl = await captureTabWithRetry(windowId, abortController.signal);
       const bitmap = await dataUrlToBitmap(dataUrl);
       try {
         if (canvas === null) {
-          scaleX = bitmap.width / viewport.width;
-          scaleY = bitmap.height / viewport.height;
+          scaleX = bitmap.width / screenshotViewport.width;
+          scaleY = bitmap.height / screenshotViewport.height;
           const outputWidth = Math.ceil(rect.width * scaleX);
           const outputHeight = Math.ceil(rect.height * scaleY);
           assertCanvasSize(outputWidth, outputHeight);
@@ -111,8 +137,10 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
         drawTile(context, bitmap, rect, viewport, scrollResponse.position, scaleX, scaleY);
       } finally { bitmap.close(); }
       void chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_PROGRESS', completed: index + 1, total: tiles.length } satisfies ExtensionMessage).catch(() => undefined);
+      captureProgressStates.set(tabId, { phase: 'capturing', completed: index + 1, total: tiles.length });
     }
     if (canvas === null) throw new Error('캡처 이미지가 생성되지 않았습니다.');
+    captureProgressStates.set(tabId, { phase: 'compositing', completed: tiles.length, total: tiles.length });
     const blob = await canvas.convertToBlob({ type: 'image/png' });
     const captureId = crypto.randomUUID();
     await saveCapture({ id: captureId, blob, width: canvas.width, height: canvas.height, title: sanitizeTitle(title), createdAt: Date.now() });
@@ -120,6 +148,7 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
     if (viewerTab.id !== undefined) viewerCaptures.set(viewerTab.id, captureId);
     return captureId;
   } finally {
+    captureProgressStates.delete(tabId);
     if (captureAbortControllers.get(tabId) === abortController) captureAbortControllers.delete(tabId);
   }
 }
@@ -182,13 +211,18 @@ async function ensureContentScript(tabId: number): Promise<void> {
 async function sendToolCommand(tabId: number, tool: ToolMode): Promise<void> {
   await chrome.tabs.sendMessage(tabId, { type: 'TOOL_COMMAND', tool } satisfies ExtensionMessage);
 }
-async function queryContentState(tabId: number): Promise<ToolMode> {
+async function queryContentState(tabId: number): Promise<{ tool: ToolMode; captureProgress?: CaptureProgressState }> {
   try {
     const response = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, { type: 'GET_TOOL_STATE' });
-    return response.ok ? response.tool ?? 'idle' : 'idle';
-  } catch { return 'idle'; }
+    return response.ok ? { tool: response.tool ?? 'idle', captureProgress: response.captureProgress } : { tool: 'idle' };
+  } catch { return { tool: 'idle' }; }
 }
 function getErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return /Cannot access|chrome:\/\/|extensions gallery/i.test(message) ? '이 페이지에서는 PixelScope를 실행할 수 없습니다.' : message;
+}
+async function setCaptureBadge(tabId: number, tool: ToolMode): Promise<void> {
+  const capturing = tool === 'capture-element' || tool === 'capture-page';
+  if (capturing) await chrome.action.setBadgeBackgroundColor({ tabId, color: '#dc2626' });
+  await chrome.action.setBadgeText({ tabId, text: capturing ? 'REC' : '' });
 }

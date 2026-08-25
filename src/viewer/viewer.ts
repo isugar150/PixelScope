@@ -15,12 +15,16 @@ const zoomIn = requiredElement('zoom-in', HTMLButtonElement);
 const fitButton = requiredElement('fit', HTMLButtonElement);
 const copyButton = requiredElement('copy', HTMLButtonElement);
 const downloadButton = requiredElement('download', HTMLButtonElement);
+const chromeSaveButton = requiredElement('chrome-save', HTMLButtonElement);
 let capture: StoredCapture | null = null;
 let objectUrl: string | null = null;
 let zoom = 1;
 let toastTimer: number | null = null;
 
-void initialize();
+void initialize().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  showError(`캡처 이미지를 불러오지 못했습니다: ${message}`);
+});
 
 async function initialize(): Promise<void> {
   await deleteExpiredCaptures();
@@ -42,6 +46,7 @@ zoomIn.addEventListener('click', () => setZoom(zoom + .25));
 fitButton.addEventListener('click', fitToWidth);
 copyButton.addEventListener('click', () => void copyCapture());
 downloadButton.addEventListener('click', downloadCapture);
+chromeSaveButton.addEventListener('click', () => void saveCaptureWithChrome());
 window.addEventListener('pagehide', () => {
   if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
 });
@@ -64,8 +69,36 @@ async function copyCapture(): Promise<void> {
 }
 function downloadCapture(): void {
   if (capture === null || objectUrl === null) return;
-  const anchor = document.createElement('a'); anchor.href = objectUrl; anchor.download = `${capture.title}.png`; anchor.click();
+  const anchor = document.createElement('a'); anchor.href = objectUrl; anchor.download = captureFilename(capture.title); anchor.click();
   showToast('PNG 저장을 시작했습니다.');
+}
+async function saveCaptureWithChrome(): Promise<void> {
+  if (capture === null || objectUrl === null) return;
+  chromeSaveButton.disabled = true;
+  chromeSaveButton.setAttribute('aria-busy', 'true');
+  try {
+    await chrome.downloads.download({
+      url: objectUrl,
+      filename: captureFilename(capture.title),
+      conflictAction: 'uniquify',
+      saveAs: true,
+    });
+    showToast('Chrome 저장을 시작했습니다.');
+  } catch {
+    showToast('Chrome 저장이 취소되었거나 시작되지 않았습니다.');
+  } finally {
+    chromeSaveButton.disabled = false;
+    chromeSaveButton.removeAttribute('aria-busy');
+  }
+}
+function captureFilename(captureTitle: string): string {
+  const printableTitle = Array.from(captureTitle, (character) => character.charCodeAt(0) < 32 ? '_' : character).join('');
+  const safeTitle = printableTitle
+    .replace(/[<>:"/\\|?*]/g, '_')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, 180);
+  return `${safeTitle || 'PixelScope-capture'}.png`;
 }
 function showError(message: string): void { empty.classList.add('error'); empty.replaceChildren(document.createTextNode(message)); meta.textContent = '임시 데이터 없음'; }
 function showToast(message: string): void {
