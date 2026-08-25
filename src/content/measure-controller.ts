@@ -1,14 +1,15 @@
 import { calculateAutoScroll, documentRectToViewport, rectangleFromPoints, viewportToDocument, type Point } from './coordinate';
+import type { MeasurementUnit } from '../shared/tool-state';
 import { captureVisibleTab, CaptureManager, nextPaint } from './color-picker/capture-manager';
 import { getCaptureViewport, PixelSampler } from './color-picker/pixel-sampler';
-import { findInspectableElement, formatCssPixels, isAreaDrag, isInspectableElement } from './measure-utils';
+import { findInspectableElement, formatMeasurement, isAreaDrag, isInspectableElement } from './measure-utils';
 import { MeasurementOverlay } from './overlay';
 import { interactionStyles } from './styles';
 
 type MeasureInteractionState =
   | { readonly type: 'idle' }
   | { readonly type: 'hovering'; readonly element: Element }
-  | { readonly type: 'pointer-pending'; readonly element: Element | null; readonly startViewport: Point; readonly startDocument: Point; readonly pointerId: number }
+  | { readonly type: 'pointer-pending'; readonly element: Element | null; readonly startViewport: Point; readonly startDocument: Point; readonly pointerId: number; readonly pointerType: string }
   | { readonly type: 'element-locked'; readonly element: Element }
   | { readonly type: 'area-dragging'; readonly start: Point; readonly current: Point; readonly pointerId: number }
   | { readonly type: 'area-locked'; readonly start: Point; readonly end: Point };
@@ -24,18 +25,22 @@ export class MeasureController {
   #active = false;
   #lastViewport: Point | null = null;
   #frameId: number | null = null;
+  #measurementUnit: MeasurementUnit = 'px';
 
   public constructor(onExit: () => void = () => this.disable()) { this.#onExit = onExit; }
   public get active(): boolean { return this.#active; }
 
-  public enable(): void {
+  public async enable(): Promise<void> {
     if (this.#active) return;
     this.#active = true;
+    const settings = await chrome.storage.local.get({ measurementUnit: 'px' });
+    this.#measurementUnit = isStoredMeasurementUnit(settings.measurementUnit) ? settings.measurementUnit : 'px';
     this.#overlay = new MeasurementOverlay();
     this.#interactionStyle = document.createElement('style');
     this.#interactionStyle.dataset.pixelscopeInteraction = '';
     this.#interactionStyle.textContent = interactionStyles;
     document.documentElement.append(this.#interactionStyle);
+    this.#setTouchDragEnabled(true);
     this.#sampler = new PixelSampler();
     this.#capture = new CaptureManager({
       capture: captureVisibleTab,
@@ -57,12 +62,14 @@ export class MeasureController {
     this.#capture?.destroy(); this.#capture = null; this.#sampler = null;
     this.#overlay?.destroy(); this.#overlay = null;
     this.#interactionStyle?.remove(); this.#interactionStyle = null;
+    this.#setTouchDragEnabled(false);
     this.#state = { type: 'idle' }; this.#lastViewport = null;
   }
 
   readonly #onPointerDown = (event: PointerEvent): void => {
     if (!event.isPrimary || !isSupportedPointer(event.pointerType) || event.button !== 0) return;
-    event.preventDefault(); event.stopImmediatePropagation();
+    if (this.#state.type === 'element-locked' || this.#state.type === 'area-locked') return;
+    if (event.pointerType !== 'touch') { event.preventDefault(); event.stopImmediatePropagation(); }
     const viewport = { x: event.clientX, y: event.clientY };
     this.#lastViewport = viewport;
     this.#disconnectObserver();
@@ -72,8 +79,9 @@ export class MeasureController {
       startViewport: viewport,
       startDocument: this.#toDocument(viewport),
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
     };
-    this.#overlay?.capturePointer(event.pointerId);
+    if (event.pointerType !== 'touch') this.#overlay?.capturePointer(event.pointerId);
     this.#ensureFrame();
   };
 
@@ -82,6 +90,11 @@ export class MeasureController {
     const activePointerId = this.#state.type === 'pointer-pending' || this.#state.type === 'area-dragging' ? this.#state.pointerId : null;
     if (event.pointerType !== 'mouse' && activePointerId !== event.pointerId) return;
     this.#lastViewport = { x: event.clientX, y: event.clientY };
+    if (this.#state.type === 'pointer-pending' && this.#state.pointerType === 'touch' && isAreaDrag(this.#state.startViewport, this.#lastViewport)) {
+      this.#state = { type: 'idle' };
+      this.#overlay?.hideMeasurement();
+      return;
+    }
     if (this.#state.type === 'pointer-pending' || this.#state.type === 'area-dragging') {
       event.preventDefault(); event.stopImmediatePropagation();
     }
@@ -95,17 +108,20 @@ export class MeasureController {
     event.preventDefault(); event.stopImmediatePropagation();
     this.#lastViewport = { x: event.clientX, y: event.clientY };
     if (this.#state.type === 'pointer-pending') {
-      if (isAreaDrag(this.#state.startViewport, this.#lastViewport)) {
+      if (this.#state.pointerType !== 'touch' && isAreaDrag(this.#state.startViewport, this.#lastViewport)) {
         this.#state = { type: 'area-locked', start: this.#state.startDocument, end: this.#toDocument(this.#lastViewport) };
+        this.#lockSelection();
       } else {
         const element = this.#state.element;
         this.#state = element === null ? { type: 'idle' } : { type: 'element-locked', element };
         if (element !== null) this.#observe(element);
+        if (element !== null) this.#lockSelection();
       }
     } else {
       this.#state = { type: 'area-locked', start: this.#state.start, end: this.#toDocument(this.#lastViewport) };
+      this.#lockSelection();
     }
-    this.#overlay?.releasePointer(event.pointerId);
+    if (event.pointerType !== 'touch') this.#overlay?.releasePointer(event.pointerId);
     this.#render();
     this.#cancelFrame();
   };
@@ -114,6 +130,7 @@ export class MeasureController {
     if (this.#state.type !== 'pointer-pending' && this.#state.type !== 'area-dragging') return;
     this.#overlay?.releasePointer(event.pointerId);
     this.#state = { type: 'idle' };
+    this.#setTouchDragEnabled(true);
     this.#ensureFrame();
   };
 
@@ -121,24 +138,36 @@ export class MeasureController {
     if (event.button === 0) { event.preventDefault(); event.stopImmediatePropagation(); }
   };
 
-  readonly #onViewportChange = (): void => { this.#capture?.schedule(); this.#ensureFrame(); };
+  readonly #onViewportChange = (): void => {
+    if (this.#state.type !== 'element-locked' && this.#state.type !== 'area-locked') this.#capture?.schedule();
+    this.#ensureFrame();
+  };
   readonly #onBlur = (): void => {
-    if (this.#state.type === 'pointer-pending' || this.#state.type === 'area-dragging') this.#state = { type: 'idle' };
+    if (this.#state.type === 'pointer-pending' || this.#state.type === 'area-dragging') { this.#state = { type: 'idle' }; this.#setTouchDragEnabled(true); }
     this.#releasePointer(); this.#ensureFrame();
   };
   readonly #onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); this.#onExit(); return; }
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (this.#state.type === 'element-locked' || this.#state.type === 'area-locked') {
+        this.#disconnectObserver();
+        this.#state = { type: 'idle' };
+        this.#setTouchDragEnabled(true);
+        this.#overlay?.hideMeasurement();
+        this.#capture?.schedule();
+        return;
+      }
+      this.#onExit(); return;
+    }
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-    const element = this.#state.type === 'hovering' || this.#state.type === 'element-locked' ? this.#state.element : null;
+    const element = this.#state.type === 'hovering' ? this.#state.element : null;
     if (element === null) return;
     const next = event.key === 'ArrowUp'
       ? findInspectableElement(element.parentElement, this.#overlay?.host)
       : Array.from(element.children).find((child) => isInspectableElement(child, this.#overlay?.host)) ?? null;
     if (next === null) return;
     event.preventDefault(); event.stopImmediatePropagation();
-    const locked = this.#state.type === 'element-locked';
-    this.#state = locked ? { type: 'element-locked', element: next } : { type: 'hovering', element: next };
-    if (locked) this.#observe(next);
+    this.#state = { type: 'hovering', element: next };
     this.#ensureFrame();
   };
   readonly #preventInteraction = (event: Event): void => { event.preventDefault(); event.stopImmediatePropagation(); };
@@ -146,7 +175,7 @@ export class MeasureController {
   readonly #tick = (): void => {
     this.#frameId = null;
     if (!this.#active || this.#lastViewport === null) return;
-    if (this.#state.type === 'pointer-pending' && isAreaDrag(this.#state.startViewport, this.#lastViewport)) {
+    if (this.#state.type === 'pointer-pending' && this.#state.pointerType !== 'touch' && isAreaDrag(this.#state.startViewport, this.#lastViewport)) {
       this.#state = { type: 'area-dragging', start: this.#state.startDocument, current: this.#toDocument(this.#lastViewport), pointerId: this.#state.pointerId };
       this.#overlay?.hideMeasurement();
     }
@@ -164,22 +193,24 @@ export class MeasureController {
 
   #render(): void {
     if (this.#lastViewport === null) return;
-    this.#overlay?.renderCrosshair(this.#lastViewport);
+    const selectionLocked = this.#state.type === 'element-locked' || this.#state.type === 'area-locked';
+    if (selectionLocked) this.#overlay?.hidePointerAids();
+    else this.#overlay?.renderCrosshair(this.#lastViewport);
     let measurement: string | undefined;
     if (this.#state.type === 'hovering' || this.#state.type === 'element-locked') {
-      if (!this.#state.element.isConnected) { this.#disconnectObserver(); this.#state = { type: 'idle' }; this.#overlay?.hideMeasurement(); }
+      if (!this.#state.element.isConnected) { this.#disconnectObserver(); this.#state = { type: 'idle' }; this.#setTouchDragEnabled(true); this.#overlay?.hideMeasurement(); }
       else {
-        this.#overlay?.renderElement(this.#state.element, this.#state.type === 'element-locked');
-        const rect = this.#state.element.getBoundingClientRect(); measurement = `${formatCssPixels(rect.width)} × ${formatCssPixels(rect.height)} px`;
+        this.#overlay?.renderElement(this.#state.element, this.#state.type === 'element-locked', this.#measurementUnit);
+        const rect = this.#state.element.getBoundingClientRect(); measurement = formatMeasurement(rect.width, rect.height, this.#measurementUnit);
       }
     } else if (this.#state.type === 'area-dragging' || this.#state.type === 'area-locked') {
       const end = this.#state.type === 'area-dragging' ? this.#state.current : this.#state.end;
       const documentRect = rectangleFromPoints(this.#state.start, end);
       const viewportRect = documentRectToViewport(documentRect, { x: scrollX, y: scrollY });
-      this.#overlay?.renderArea(viewportRect, this.#state.start, end);
-      measurement = `${formatCssPixels(documentRect.width)} × ${formatCssPixels(documentRect.height)} px`;
+      this.#overlay?.renderArea(viewportRect, this.#state.start, end, this.#measurementUnit);
+      measurement = formatMeasurement(documentRect.width, documentRect.height, this.#measurementUnit);
     } else if (this.#state.type === 'idle') this.#overlay?.hideMeasurement();
-    this.#overlay?.renderMagnifier(this.#lastViewport, this.#sampler, getCaptureViewport(), measurement);
+    if (!selectionLocked) this.#overlay?.renderMagnifier(this.#lastViewport, this.#sampler, getCaptureViewport(), measurement);
   }
 
   #elementAt(point: Point): Element | null { return findInspectableElement(document.elementFromPoint(point.x, point.y), this.#overlay?.host); }
@@ -190,6 +221,13 @@ export class MeasureController {
     this.#resizeObserver.observe(element);
   }
   #disconnectObserver(): void { this.#resizeObserver?.disconnect(); this.#resizeObserver = null; }
+  #setTouchDragEnabled(enabled: boolean): void {
+    document.documentElement.toggleAttribute('data-pixelscope-touch-drag', enabled);
+  }
+  #lockSelection(): void {
+    this.#capture?.cancelScheduled();
+    this.#setTouchDragEnabled(false);
+  }
   #releasePointer(): void {
     if (this.#state.type === 'pointer-pending' || this.#state.type === 'area-dragging') this.#overlay?.releasePointer(this.#state.pointerId);
   }
@@ -221,4 +259,8 @@ export class MeasureController {
 
 function isSupportedPointer(pointerType: string): boolean {
   return pointerType === 'mouse' || pointerType === 'touch' || pointerType === 'pen';
+}
+
+function isStoredMeasurementUnit(value: unknown): value is MeasurementUnit {
+  return value === 'px' || value === 'rem' || value === 'viewport';
 }

@@ -9,6 +9,8 @@ export interface ToolLifecycle {
 export interface ToolFactories {
   readonly measure: () => ToolLifecycle;
   readonly colorPicker: () => ToolLifecycle;
+  readonly captureElement: () => ToolLifecycle;
+  readonly capturePage: () => ToolLifecycle;
 }
 
 export class ToolController {
@@ -22,7 +24,10 @@ export class ToolController {
   public async activate(tool: ActiveTool): Promise<void> {
     if (this.#mode === tool) return;
     this.deactivate();
-    const instance = tool === 'measure' ? this.#factories.measure() : this.#factories.colorPicker();
+    const instance = tool === 'measure' ? this.#factories.measure()
+      : tool === 'color-picker' ? this.#factories.colorPicker()
+        : tool === 'capture-element' ? this.#factories.captureElement()
+          : this.#factories.capturePage();
     this.#current = instance;
     this.#mode = tool;
     try { await instance.enable(); }

@@ -1,6 +1,7 @@
 import type { CaptureViewport, PixelSampler } from './color-picker/pixel-sampler';
+import type { MeasurementUnit } from '../shared/tool-state';
 import { clampLabelPosition, type Point, type Rect } from './coordinate';
-import { calculateMagnifierPosition, describeElement, formatCssPixels } from './measure-utils';
+import { calculateMagnifierPosition, describeElement, formatMeasurement, formatMeasurementCoordinate } from './measure-utils';
 import { overlayStyles } from './styles';
 
 export class MeasurementOverlay {
@@ -34,36 +35,39 @@ export class MeasurementOverlay {
   public releasePointer(pointerId: number): void { if (this.#host.hasPointerCapture(pointerId)) this.#host.releasePointerCapture(pointerId); }
 
   public renderCrosshair(point: Point): void {
+    this.#host.dataset.pixelscopePointerAids = 'visible';
     const x = alignPixel(point.x), y = alignPixel(point.y);
     this.#vertical.style.display = 'block'; this.#horizontal.style.display = 'block';
     this.#vertical.style.transform = `translate3d(${String(x)}px,0,0)`;
     this.#horizontal.style.transform = `translate3d(0,${String(y)}px,0)`;
   }
 
-  public renderElement(element: Element, locked: boolean): void {
+  public renderElement(element: Element, locked: boolean, unit: MeasurementUnit): void {
     this.#host.dataset.pixelscopeMode = locked ? 'element-locked' : 'element-hover';
     const source = element.getBoundingClientRect();
     const rect = { left: source.left, top: source.top, width: source.width, height: source.height };
     this.#renderBox(rect, true);
-    this.#renderLabel(rect, `${formatCssPixels(rect.width)} × ${formatCssPixels(rect.height)} px`, describeElement(element));
-    if (locked) this.renderPanel('Element', rect, describeElement(element)); else this.#panel.style.display = 'none';
+    this.#renderLabel(rect, formatMeasurement(rect.width, rect.height, unit), describeElement(element));
+    if (locked) this.renderPanel('Element', rect, unit, describeElement(element)); else this.#panel.style.display = 'none';
   }
 
-  public renderArea(rect: Rect, start: Point, end: Point): void {
+  public renderArea(rect: Rect, start: Point, end: Point, unit: MeasurementUnit): void {
     this.#host.dataset.pixelscopeMode = 'area';
     this.#renderBox(rect, false);
-    this.#renderLabel(rect, `${formatCssPixels(rect.width)} × ${formatCssPixels(rect.height)} px`);
-    this.renderPanel('Area', rect, undefined, start, end);
+    this.#renderLabel(rect, formatMeasurement(rect.width, rect.height, unit));
+    this.renderPanel('Area', rect, unit, undefined, start, end);
   }
 
-  public renderPanel(mode: 'Element' | 'Area', rect: Rect, descriptor?: string, start?: Point, end?: Point): void {
-    const position = `W ${formatCssPixels(rect.width)} · H ${formatCssPixels(rect.height)} · X ${formatCssPixels(rect.left)} · Y ${formatCssPixels(rect.top)}`;
-    const coordinates = start === undefined || end === undefined ? '' : ` · Start ${formatCssPixels(start.x)},${formatCssPixels(start.y)} · End ${formatCssPixels(end.x)},${formatCssPixels(end.y)}`;
-    this.#panel.textContent = `${mode}${descriptor === undefined ? '' : ` · ${descriptor}`} · ${position}${coordinates}`;
+  public renderPanel(mode: 'Element' | 'Area', rect: Rect, unit: MeasurementUnit, descriptor?: string, start?: Point, end?: Point): void {
+    const position = `${formatMeasurement(rect.width, rect.height, unit)} · X ${formatMeasurementCoordinate(rect.left, unit, 'x')} · Y ${formatMeasurementCoordinate(rect.top, unit, 'y')}`;
+    const coordinates = start === undefined || end === undefined ? '' : ` · Start ${formatMeasurementCoordinate(start.x, unit, 'x')},${formatMeasurementCoordinate(start.y, unit, 'y')} · End ${formatMeasurementCoordinate(end.x, unit, 'x')},${formatMeasurementCoordinate(end.y, unit, 'y')}`;
+    this.#panel.textContent = `${mode}${descriptor === undefined ? '' : ` · ${descriptor}`} · ${position}${coordinates} · Esc 다시 선택`;
     this.#panel.style.display = 'block';
   }
 
   public renderMagnifier(point: Point, sampler: PixelSampler | null, captureViewport: CaptureViewport, measurement?: string): void {
+    this.#host.dataset.pixelscopePointerAids = 'visible';
+    this.#magnifier.style.display = 'block';
     const position = calculateMagnifierPosition(point, { width: 136, height: 156 }, { width: innerWidth, height: innerHeight });
     this.#magnifier.style.transform = `translate3d(${String(position.x)}px,${String(position.y)}px,0)`;
     this.#magnifierMeta.textContent = `X: ${String(Math.round(point.x))}, Y: ${String(Math.round(point.y))}${measurement === undefined ? '' : ` · ${measurement}`}`;
@@ -73,6 +77,13 @@ export class MeasurementOverlay {
     sampler.drawZoom(context, point, captureViewport, 15);
     context.strokeStyle = '#fff'; context.lineWidth = 1; context.strokeRect(56.5, 56.5, 8, 8);
     context.beginPath(); context.moveTo(60.5, 53); context.lineTo(60.5, 68); context.moveTo(53, 60.5); context.lineTo(68, 60.5); context.stroke();
+  }
+
+  public hidePointerAids(): void {
+    this.#host.dataset.pixelscopePointerAids = 'hidden';
+    this.#horizontal.style.display = 'none';
+    this.#vertical.style.display = 'none';
+    this.#magnifier.style.display = 'none';
   }
 
   public hideMeasurement(): void { this.#host.dataset.pixelscopeMode = 'idle'; this.#box.style.display = 'none'; this.#label.style.display = 'none'; this.#panel.style.display = 'none'; }

@@ -1,5 +1,6 @@
-import type { CopyFormat, UserSettings } from '../../shared/tool-state';
+import type { CopyFormat } from '../../shared/tool-state';
 import { viewportToDocument, type Point } from '../coordinate';
+import { colorPickerInteractionStyles } from '../styles';
 import type { ToolLifecycle } from '../tool-controller';
 import { rgbToHex, rgbToHsl, type RgbColor } from './color-converter';
 import { ColorPickerOverlay } from './color-picker-overlay';
@@ -12,7 +13,7 @@ export class ColorPickerController implements ToolLifecycle {
   #sampler: PixelSampler | null = null;
   #capture: CaptureManager | null = null;
   #style: HTMLStyleElement | null = null;
-  #settings: UserSettings = { copyFormat: 'hex', keepColorPickerActive: true };
+  #copyFormat: CopyFormat = 'hex';
   #active = false;
   #frame: number | null = null;
   #lastPoint: Point | null = null;
@@ -24,11 +25,12 @@ export class ColorPickerController implements ToolLifecycle {
   public async enable(): Promise<void> {
     if (this.#active) return;
     this.#active = true;
-    this.#settings = await loadSettings();
+    this.#copyFormat = await loadCopyFormat();
     this.#overlay = new ColorPickerOverlay();
     this.#sampler = new PixelSampler();
     this.#style = document.createElement('style');
-    this.#style.textContent = 'html,html *{cursor:url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'24\' height=\'24\'%3E%3Cpath fill=\'%23fff\' stroke=\'%230f172a\' d=\'m16 2 6 6-3 3-1-1-7 7v3l-3 2-2-2 2-3h3l7-7-1-1z\'/%3E%3C/svg%3E") 2 22,crosshair!important}';
+    this.#style.dataset.pixelscopeInteraction = '';
+    this.#style.textContent = colorPickerInteractionStyles;
     document.documentElement.append(this.#style);
     this.#capture = new CaptureManager({
       capture: captureVisibleTab,
@@ -80,11 +82,10 @@ export class ColorPickerController implements ToolLifecycle {
   readonly #onViewportChange = (): void => this.#capture?.schedule();
 
   async #copyColor(color: RgbColor): Promise<void> {
-    const text = formatColor(color, this.#settings.copyFormat);
+    const text = formatColor(color, this.#copyFormat);
     try {
       await navigator.clipboard.writeText(text);
       this.#overlay?.showToast(`${text} 복사됨`);
-      if (!this.#settings.keepColorPickerActive) this.#onExit();
     } catch { this.#overlay?.showToast('클립보드 복사에 실패했습니다.', true); }
   }
 
@@ -113,10 +114,11 @@ function formatColor(color: RgbColor, format: CopyFormat): string {
   if (format === 'hsl') { const hsl = rgbToHsl(color); return `hsl(${String(hsl.h)}, ${String(hsl.s)}%, ${String(hsl.l)}%)`; }
   return rgbToHex(color);
 }
-async function loadSettings(): Promise<UserSettings> {
-  const stored = await chrome.storage.local.get({ copyFormat: 'hex', keepColorPickerActive: true });
-  return {
-    copyFormat: stored.copyFormat === 'rgb' || stored.copyFormat === 'hsl' ? stored.copyFormat : 'hex',
-    keepColorPickerActive: stored.keepColorPickerActive !== false,
-  };
+async function loadCopyFormat(): Promise<CopyFormat> {
+  const stored = await chrome.storage.local.get({ copyFormat: 'hex' });
+  return isStoredCopyFormat(stored.copyFormat) ? stored.copyFormat : 'hex';
+}
+
+function isStoredCopyFormat(value: unknown): value is CopyFormat {
+  return value === 'hex' || value === 'rgb' || value === 'hsl';
 }

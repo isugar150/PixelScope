@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+  <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PixelScope 캡처</title></head>
+  <body>
+    <main>
+      <header>
+        <div class="identity"><img src="/icons/icon-32.png" width="32" height="32" alt=""><div><h1 id="title">캡처 결과</h1><p id="meta">이미지를 불러오는 중입니다.</p></div></div>
+        <div class="actions" aria-label="캡처 작업">
+          <div class="zoom" role="group" aria-label="확대 및 축소">
+            <button id="zoom-out" type="button" aria-label="축소">−</button><output id="zoom-value">100%</output><button id="zoom-in" type="button" aria-label="확대">+</button>
+            <button id="fit" type="button">화면 맞춤</button>
+          </div>
+          <button id="copy" class="secondary" type="button">클립보드 복사</button>
+          <button id="download" class="primary" type="button">PNG 저장</button>
+        </div>
+      </header>
+      <section class="stage" id="stage" aria-label="캡처 이미지 미리보기">
+        <div class="empty" id="empty"><span class="spinner" aria-hidden="true"></span><strong>캡처 이미지를 준비하고 있습니다</strong></div>
+        <img id="capture" alt="캡처 결과" hidden>
+      </section>
+      <p id="toast" role="status" aria-live="polite"></p>
+    </main>
+    <script type="module" src="./viewer.ts"></script>
+  </body>
+</html>

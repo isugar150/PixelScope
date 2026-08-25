@@ -29,4 +29,27 @@ describe('CaptureManager', () => {
     expect(capture).toHaveBeenCalledOnce();
     manager.destroy(); vi.useRealTimers();
   });
+
+  it('cancels a scheduled capture refresh', async () => {
+    vi.useFakeTimers();
+    const capture = vi.fn(() => Promise.resolve('image'));
+    const manager = new CaptureManager({ capture, load: () => Promise.resolve(), debounceMs: 100 });
+    manager.schedule();
+    manager.cancelScheduled();
+    await vi.advanceTimersByTimeAsync(101);
+    expect(capture).not.toHaveBeenCalled();
+    manager.destroy(); vi.useRealTimers();
+  });
+
+  it('absorbs extension-context invalidation from scheduled captures and stops retrying', async () => {
+    vi.useFakeTimers();
+    const capture = vi.fn(() => Promise.reject(new Error('Extension context invalidated.')));
+    const manager = new CaptureManager({ capture, load: () => Promise.resolve(), debounceMs: 10 });
+    manager.schedule();
+    await vi.advanceTimersByTimeAsync(11);
+    manager.schedule();
+    await vi.advanceTimersByTimeAsync(11);
+    expect(capture.mock.calls).toHaveLength(1);
+    manager.destroy(); vi.useRealTimers();
+  });
 });

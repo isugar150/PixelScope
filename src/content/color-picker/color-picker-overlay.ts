@@ -15,6 +15,7 @@ export class ColorPickerOverlay {
   #toastTimer: number | null = null;
 
   public constructor() {
+    this.#host.dataset.pixelscopeOverlay = '';
     this.#host.style.cssText = 'all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
     const shadow = this.#host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');

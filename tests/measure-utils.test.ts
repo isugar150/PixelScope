@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { calculateMagnifierPosition, describeElement, elementRect, findInspectableElement, isAreaDrag } from '../src/content/measure-utils';
+import { calculateMagnifierPosition, describeElement, elementRect, findInspectableElement, formatMeasurement, isAreaDrag } from '../src/content/measure-utils';
 
 describe('measure interaction helpers', () => {
   it('treats movement up to 4px as a click and larger movement as a drag', () => {
@@ -35,6 +35,13 @@ describe('measure interaction helpers', () => {
       .toEqual({ x: 254, y: 154 });
     expect(calculateMagnifierPosition({ x: 20, y: 20 }, { width: 120, height: 120 }, { width: 400, height: 300 }))
       .toEqual({ x: 36, y: 36 });
+  });
+
+  it('formats measurements using pixels, rems, and viewport units', () => {
+    document.documentElement.style.fontSize = '16px';
+    expect(formatMeasurement(160, 80, 'px')).toBe('160 × 80 px');
+    expect(formatMeasurement(160, 80, 'rem')).toBe('10 × 5 rem');
+    expect(formatMeasurement(window.innerWidth / 2, window.innerHeight / 4, 'viewport')).toBe('50vw × 25vh');
   });
 });
 

@@ -10,6 +10,7 @@ PixelScope는 Chrome Extension Manifest V3 기반의 페이지 측정 도구입�
 - 프레임워크 및 외부 런타임 라이브러리 없음
 - Shadow DOM 기반 오버레이
 - 영역 측정, DOM 요소 측정, 컬러 피커 제공
+- DOM 객체 및 전체 페이지 타일 캡처와 휘발성 결과 뷰어 제공
 - 화면 캡처와 색상 분석은 브라우저 메모리에서만 처리
 - 광범위한 host permission 및 외부 데이터 전송 금지
 
@@ -26,6 +27,9 @@ src/content/measure-controller.ts  요소/영역 측정 interaction 상태
 src/content/coordinate.ts          document/viewport 좌표 계산
 src/content/overlay.ts             측정 Shadow DOM UI
 src/content/color-picker/          캡처, 샘플링, 색상 변환과 UI
+src/content/capture/               객체 선택과 전체 페이지 캡처 진행 UI
+src/capture/                       타일 계획과 임시 IndexedDB Blob 저장
+src/viewer/                        캡처 결과 복사, 저장, 확대/축소
 tests/                             Vitest 단위 테스트
 tests/browser/                     Playwright 확장 브라우저 테스트
 ```
@@ -44,6 +48,7 @@ tests/browser/                     Playwright 확장 브라우저 테스트
 - 필요한 최소 권한만 요청합니다. 새 권한은 사용 이유와 Web Store 영향을 검토하고 README에 기록합니다.
 - `chrome://`, Chrome Web Store 등 주입 금지 페이지 오류를 사용자에게 명확히 전달합니다.
 - content script 중복 주입을 방지하고, service worker 재시작 후에도 content의 실제 상태를 확인합니다.
+- 새 content runtime은 DOM dispose 이벤트로 이전 controller와 listener를 종료하고 stale overlay/style을 제거해야 합니다.
 - content 빌드는 외부 import가 없는 단일 IIFE여야 합니다. 반복 주입 시 전역 lexical 선언이 충돌하지 않아야 합니다.
 - 원격 코드, `eval`, `unsafe-eval`, 동적 `innerHTML` 문자열 삽입을 금지합니다.
 
@@ -71,7 +76,12 @@ tests/browser/                     Playwright 확장 브라우저 테스트
 - 이미지 좌표는 `visualViewport`의 크기와 offset을 기준으로 가로·세로 배율을 독립 적용하고 경계를 clamp합니다.
 - 캡처 요청은 중복 실행과 오래된 응답 덮어쓰기를 방지합니다.
 - 캡처 실패가 DOM/영역 측정 전체를 중단시키면 안 됩니다.
+- debounce 또는 경합 후 예약 캡처 Promise는 항상 내부에서 rejection을 처리하고, extension context invalidation 시 재시도를 중단합니다.
 - DevTools 모바일 에뮬레이션의 primary touch/pen pointer와 `visualViewport` offset 보정을 유지합니다.
+- 모바일 터치는 native pan을 우선해 한 손가락으로 스크롤할 수 있어야 하며, 탭 요소 선택을 유지합니다. 정밀 영역 드래그는 마우스·펜 입력으로 제공합니다.
+- 전체 페이지 캡처는 `captureVisibleTab()` 호출 제한을 지키고, 각 타일 전에 오버레이를 숨긴 뒤 안정된 paint를 기다립니다.
+- 캡처 전 스크롤 위치와 임시 inline 스타일을 성공·실패·취소 모든 경로에서 복원합니다.
+- 완성 PNG는 extension-origin IndexedDB에 Blob으로 임시 저장하며 뷰어 종료와 TTL 정리를 모두 제공합니다.
 
 ## UI와 접근성
 

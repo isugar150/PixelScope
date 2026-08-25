@@ -1,4 +1,5 @@
 import type { Point, Rect, Size } from './coordinate';
+import type { MeasurementUnit } from '../shared/tool-state';
 
 export const DRAG_THRESHOLD = 4;
 
@@ -41,6 +42,31 @@ export function formatCssPixels(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
+export function formatMeasurement(width: number, height: number, unit: MeasurementUnit): string {
+  if (unit === 'rem') {
+    const rootSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    return `${formatDecimal(width / rootSize)} × ${formatDecimal(height / rootSize)} rem`;
+  }
+  if (unit === 'viewport') {
+    const viewportWidth = window.innerWidth || 1;
+    const viewportHeight = window.innerHeight || 1;
+    return `${formatDecimal(width / viewportWidth * 100)}vw × ${formatDecimal(height / viewportHeight * 100)}vh`;
+  }
+  return `${formatCssPixels(width)} × ${formatCssPixels(height)} px`;
+}
+
+export function formatMeasurementCoordinate(value: number, unit: MeasurementUnit, axis: 'x' | 'y'): string {
+  if (unit === 'rem') {
+    const rootSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    return `${formatDecimal(value / rootSize)}rem`;
+  }
+  if (unit === 'viewport') {
+    const viewportSize = (axis === 'x' ? window.innerWidth : window.innerHeight) || 1;
+    return `${formatDecimal(value / viewportSize * 100)}v${axis === 'x' ? 'w' : 'h'}`;
+  }
+  return `${formatCssPixels(value)}px`;
+}
+
 export function calculateMagnifierPosition(pointer: Point, magnifier: Size, viewport: Size, gap = 16, margin = 8): Point {
   const preferredX = pointer.x + gap + magnifier.width <= viewport.width - margin
     ? pointer.x + gap : pointer.x - gap - magnifier.width;
@@ -54,4 +80,9 @@ export function calculateMagnifierPosition(pointer: Point, magnifier: Size, view
 
 function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
+}
+
+function formatDecimal(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0$/, '');
 }
