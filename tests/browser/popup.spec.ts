@@ -1,6 +1,25 @@
 import { chromium, expect, test } from '@playwright/test';
 import { resolve } from 'node:path';
 
+test('privacy policy is bundled as a public standalone page', async () => {
+  const extensionPath = resolve(import.meta.dirname, '../../dist');
+  const context = await chromium.launchPersistentContext('', {
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    let worker = context.serviceWorkers()[0];
+    worker ??= await context.waitForEvent('serviceworker');
+    const extensionId = new URL(worker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/privacy-policy.html`);
+    await expect(page.getByRole('heading', { name: '개인정보처리방침', exact: true })).toBeVisible();
+    await expect(page.getByText('PixelScope는 사용자의 데이터를 외부 서버로 전송하지 않습니다.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '2. 처리하는 데이터' })).toBeVisible();
+    await expect(page.locator('script')).toHaveCount(0);
+  } finally { await context.close(); }
+});
+
 test('popup exposes keyboard-accessible tools and persisted settings', async () => {
   const extensionPath = resolve(import.meta.dirname, '../../dist');
   const context = await chromium.launchPersistentContext('', {
@@ -64,7 +83,7 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
   } finally { await context.close(); }
 });
 
-test('capture viewer loads ephemeral PNG and exposes zoom and export actions', async () => {
+test('capture viewer loads ephemeral PNG and supports pixel-accurate crop and export actions', async () => {
   const extensionPath = resolve(import.meta.dirname, '../../dist');
   const context = await chromium.launchPersistentContext('', {
     headless: false,
@@ -77,9 +96,9 @@ test('capture viewer loads ephemeral PNG and exposes zoom and export actions', a
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/src/viewer/viewer.html`);
     await page.evaluate(async () => {
-      const canvas = document.createElement('canvas'); canvas.width = 2; canvas.height = 2;
+      const canvas = document.createElement('canvas'); canvas.width = 100; canvas.height = 80;
       const context = canvas.getContext('2d'); if (context === null) throw new Error('canvas unavailable');
-      context.fillStyle = '#38bdf8'; context.fillRect(0, 0, 2, 2);
+      context.fillStyle = '#38bdf8'; context.fillRect(0, 0, 100, 80);
       const blob = await new Promise<Blob>((resolveBlob, reject) => canvas.toBlob((value) => value === null ? reject(new Error('blob unavailable')) : resolveBlob(value), 'image/png'));
       const database = await new Promise<IDBDatabase>((resolveDatabase, reject) => {
         const request = indexedDB.open('pixelscope-captures', 1);
@@ -88,7 +107,7 @@ test('capture viewer loads ephemeral PNG and exposes zoom and export actions', a
       });
       await new Promise<void>((resolveWrite, reject) => {
         const transaction = database.transaction('captures', 'readwrite');
-        transaction.objectStore('captures').put({ id: 'viewer-test', blob, width: 2, height: 2, title: 'Viewer test', createdAt: Date.now() });
+        transaction.objectStore('captures').put({ id: 'viewer-test', blob, width: 100, height: 80, title: 'Viewer test', createdAt: Date.now() });
         transaction.oncomplete = () => resolveWrite(); transaction.onerror = () => reject(transaction.error ?? new Error('write unavailable'));
       });
       database.close();
@@ -99,12 +118,44 @@ test('capture viewer loads ephemeral PNG and exposes zoom and export actions', a
     await expect(page.getByText('캡처 이미지를 준비하고 있습니다', { exact: true })).toBeHidden();
     await expect(page.getByRole('button', { name: '축소' })).toBeVisible();
     await expect(page.getByRole('button', { name: '확대' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '클립보드 복사' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'PNG 저장' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Chrome 저장' })).toBeVisible();
-    expect(await page.evaluate(() => chrome.runtime.getManifest().permissions?.includes('downloads'))).toBe(true);
+    const cropButton = page.getByRole('button', { name: '크롭', exact: true });
+    const copyButton = page.getByRole('button', { name: '클립보드 복사' });
+    const downloadButton = page.getByRole('button', { name: 'PNG 저장' });
+    await expect(cropButton).toBeVisible();
+    await expect(cropButton.locator('.button-icon')).toBeVisible();
+    await expect(cropButton.locator('span')).toHaveCount(0);
+    await expect(copyButton.locator('.button-icon')).toBeVisible();
+    await expect(copyButton.locator('span')).toHaveText('클립보드 복사');
+    await expect(downloadButton.locator('.button-icon')).toBeVisible();
+    await expect(downloadButton.locator('span')).toHaveText('PNG 저장');
+    await expect(page.getByRole('button', { name: '원본 복원' })).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Chrome 저장' })).toHaveCount(0);
+    expect(await page.evaluate(() => chrome.runtime.getManifest().permissions?.includes('downloads'))).toBe(false);
     await page.getByRole('button', { name: '확대' }).click();
     await expect(page.locator('#zoom-value')).not.toHaveText('100%');
+    await page.getByRole('button', { name: '크롭', exact: true }).click();
+    await expect(page.locator('#crop-toolbar')).toBeVisible();
+    await expect(page.getByLabel('크롭할 영역을 드래그하세요. 위쪽 숫자 입력으로도 조정할 수 있습니다.')).toBeFocused();
+    const cropLayer = page.locator('#crop-layer');
+    const bounds = await cropLayer.boundingBox();
+    if (bounds === null) throw new Error('crop layer unavailable');
+    await page.mouse.move(bounds.x + bounds.width * 0.1, bounds.y + bounds.height * 0.1);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width * 0.6, bounds.y + bounds.height * 0.6, { steps: 3 });
+    await page.mouse.up();
+    await expect(page.locator('#crop-width')).toHaveValue('50');
+    await expect(page.locator('#crop-height')).toHaveValue('40');
+    await page.getByRole('button', { name: '크롭 적용' }).click();
+    await expect(page.locator('#meta')).toContainText('50 × 40 px');
+    await expect(page.getByRole('button', { name: '원본 복원' })).toBeVisible();
+    await page.getByRole('button', { name: '원본 복원' }).click();
+    await expect(page.locator('#meta')).toContainText('100 × 80 px');
+    await page.setViewportSize({ width: 375, height: 720 });
+    await page.getByRole('button', { name: '크롭', exact: true }).click();
+    expect(await page.locator('.zoom').evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(300);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#crop-toolbar')).toBeHidden();
   } finally { await context.close(); }
 });
 

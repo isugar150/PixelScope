@@ -10,14 +10,53 @@
             <button id="zoom-out" type="button" aria-label="축소">−</button><output id="zoom-value">100%</output><button id="zoom-in" type="button" aria-label="확대">+</button>
             <button id="fit" type="button">화면 맞춤</button>
           </div>
-          <button id="copy" class="secondary" type="button">클립보드 복사</button>
-          <button id="download" class="primary" type="button">PNG 저장</button>
-          <button id="chrome-save" class="primary" type="button">Chrome 저장</button>
+          <button id="crop" class="secondary icon-only" type="button" aria-label="크롭" title="크롭" aria-pressed="false">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 3v12a2 2 0 0 0 2 2h12"></path>
+              <path d="M3 7h12a2 2 0 0 1 2 2v12"></path>
+            </svg>
+          </button>
+          <button id="reset-crop" class="secondary" type="button" hidden>원본 복원</button>
+          <button id="copy" class="secondary" type="button">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="8" y="5" width="12" height="15" rx="2"></rect>
+              <path d="M16 5V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2"></path>
+            </svg>
+            <span>클립보드 복사</span>
+          </button>
+          <button id="download" class="primary" type="button">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v12"></path>
+              <path d="m7.5 10.5 4.5 4.5 4.5-4.5"></path>
+              <path d="M5 21h14"></path>
+            </svg>
+            <span>PNG 저장</span>
+          </button>
         </div>
+        <section id="crop-toolbar" class="crop-toolbar" aria-label="크롭 영역" hidden>
+          <div class="crop-fields">
+            <label>X <input id="crop-x" type="number" inputmode="numeric" min="0" step="1"></label>
+            <label>Y <input id="crop-y" type="number" inputmode="numeric" min="0" step="1"></label>
+            <label>W <input id="crop-width" type="number" inputmode="numeric" min="1" step="1"></label>
+            <label>H <input id="crop-height" type="number" inputmode="numeric" min="1" step="1"></label>
+            <output id="crop-summary" aria-live="polite"></output>
+          </div>
+          <div class="crop-actions">
+            <button id="crop-cancel" class="secondary" type="button">취소</button>
+            <button id="crop-apply" class="primary" type="button">크롭 적용</button>
+          </div>
+        </section>
       </header>
       <section class="stage" id="stage" aria-label="캡처 이미지 미리보기">
         <div class="empty" id="empty"><span class="spinner" aria-hidden="true"></span><strong>캡처 이미지를 준비하고 있습니다</strong></div>
-        <img id="capture" alt="캡처 결과" hidden>
+        <div id="image-shell" class="image-shell" hidden>
+          <img id="capture" alt="캡처 결과" hidden>
+          <div id="crop-layer" class="crop-layer" role="region" aria-label="크롭할 영역을 드래그하세요. 위쪽 숫자 입력으로도 조정할 수 있습니다." tabindex="0" hidden>
+            <div id="crop-selection" class="crop-selection" aria-hidden="true">
+              <span id="crop-size" class="crop-size"></span>
+            </div>
+          </div>
+        </div>
       </section>
       <p id="toast" role="status" aria-live="polite"></p>
     </main>

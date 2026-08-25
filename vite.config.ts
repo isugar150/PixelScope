@@ -16,6 +16,7 @@ export default defineConfig({
         background: resolve(rootDirectory, 'src/background.ts'),
         content: resolve(rootDirectory, 'src/content/index.ts'),
         popup: resolve(rootDirectory, 'src/popup/popup.html'),
+        privacy: resolve(rootDirectory, 'privacy-policy.html'),
         viewer: resolve(rootDirectory, 'src/viewer/viewer.html'),
       },
       output: {

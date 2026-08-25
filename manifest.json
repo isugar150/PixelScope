@@ -10,7 +10,7 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["activeTab", "scripting", "storage", "clipboardWrite", "downloads"],
+  "permissions": ["activeTab", "scripting", "storage", "clipboardWrite"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
