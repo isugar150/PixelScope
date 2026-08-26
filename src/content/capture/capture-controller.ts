@@ -67,7 +67,7 @@ export class CaptureController implements ToolLifecycle {
   public disable(): void {
     if (!this.#active) return;
     this.#captureAbortController?.abort(); this.#captureAbortController = null;
-    if (this.#capturing) void chrome.runtime.sendMessage({ type: 'CAPTURE_CANCEL' } satisfies ExtensionMessage).catch(() => undefined);
+    if (this.#capturing) notifyCaptureCancel();
     this.#active = false; this.#capturing = false;
     this.#progress = null;
     this.#restorePage(); this.#removeListeners();
@@ -246,7 +246,7 @@ export class CaptureController implements ToolLifecycle {
   #stop(): void {
     if (this.#capturing) {
       this.#captureAbortController?.abort();
-      void chrome.runtime.sendMessage({ type: 'CAPTURE_CANCEL' } satisfies ExtensionMessage).catch(() => undefined);
+      notifyCaptureCancel();
     }
     else this.#onExit();
   }
@@ -412,6 +412,16 @@ function findScrollableOverlay(): HTMLElement | null {
  * scrollHeight isn't affected by `overflow: hidden`, so it can't tell us whether the page
  * actually scrolls (a common scroll-lock pattern used behind modal dialogs). Probe it directly.
  */
+/**
+ * chrome.runtime.sendMessage throws synchronously (not a rejected promise) once the extension
+ * context is invalidated (e.g. the extension was reloaded while this page is still open), so a
+ * plain `.catch()` can't protect a call made from outside an async function — wrap it here too.
+ */
+function notifyCaptureCancel(): void {
+  try { void chrome.runtime.sendMessage({ type: 'CAPTURE_CANCEL' } satisfies ExtensionMessage).catch(() => undefined); }
+  catch { /* Extension context invalidated; nothing to cancel on the other end. */ }
+}
+
 function isPageScrollable(): boolean {
   const scrolling = document.scrollingElement ?? document.documentElement;
   if (scrolling.scrollHeight <= document.documentElement.clientHeight + 2) return false;

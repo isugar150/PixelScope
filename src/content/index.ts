@@ -92,7 +92,11 @@ document.addEventListener(DISPOSE_EVENT, onDispose);
 chrome.runtime.onMessage.addListener(onMessage);
 
 function notifyState(tool: ToolMode): void {
-  void chrome.runtime.sendMessage({ type: 'TOOL_STATE_CHANGED', tool } satisfies ExtensionMessage).catch(() => undefined);
+  // chrome.runtime.sendMessage throws synchronously (not a rejected promise) once the extension
+  // context is invalidated (e.g. the extension was reloaded while this page is still open), so
+  // .catch() alone can't protect this call — it must be wrapped in try/catch too.
+  try { void chrome.runtime.sendMessage({ type: 'TOOL_STATE_CHANGED', tool } satisfies ExtensionMessage).catch(() => undefined); }
+  catch { /* Extension context invalidated; nothing to notify. */ }
 }
 
 function isContentMessage(value: unknown): value is
