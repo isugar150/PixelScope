@@ -8,7 +8,7 @@ function tool(): ToolLifecycle & { enable: ReturnType<typeof vi.fn>; disable: Re
 describe('ToolController', () => {
   it('cleans the old tool before switching and never keeps two active', async () => {
     const measure = tool(), picker = tool();
-    const controller = new ToolController({ measure: () => measure, colorPicker: () => picker, captureElement: tool, capturePage: tool, designOverlay: tool });
+    const controller = new ToolController({ measure: () => measure, colorPicker: () => picker, captureElement: tool, capturePage: tool, designOverlay: tool, cssChanges: tool });
     await controller.activate('measure');
     await controller.activate('color-picker');
     expect(measure.disable.mock.calls).toHaveLength(1);
@@ -17,15 +17,22 @@ describe('ToolController', () => {
   });
   it('ignores duplicate activation and deactivates cleanly', async () => {
     const measure = tool();
-    const controller = new ToolController({ measure: () => measure, colorPicker: tool, captureElement: tool, capturePage: tool, designOverlay: tool });
+    const controller = new ToolController({ measure: () => measure, colorPicker: tool, captureElement: tool, capturePage: tool, designOverlay: tool, cssChanges: tool });
     await controller.activate('measure'); await controller.activate('measure'); controller.deactivate();
     expect(measure.enable.mock.calls).toHaveLength(1); expect(measure.disable.mock.calls).toHaveLength(1); expect(controller.mode).toBe('idle');
   });
   it('activates the requested capture tool', async () => {
     const capture = tool();
-    const controller = new ToolController({ measure: tool, colorPicker: tool, captureElement: () => capture, capturePage: tool, designOverlay: tool });
+    const controller = new ToolController({ measure: tool, colorPicker: tool, captureElement: () => capture, capturePage: tool, designOverlay: tool, cssChanges: tool });
     await controller.activate('capture-element');
     expect(capture.enable.mock.calls).toHaveLength(1);
     expect(controller.mode).toBe('capture-element');
+  });
+  it('activates the CSS changes tool', async () => {
+    const cssChanges = tool();
+    const controller = new ToolController({ measure: tool, colorPicker: tool, captureElement: tool, capturePage: tool, designOverlay: tool, cssChanges: () => cssChanges });
+    await controller.activate('css-changes');
+    expect(cssChanges.enable.mock.calls).toHaveLength(1);
+    expect(controller.mode).toBe('css-changes');
   });
 });

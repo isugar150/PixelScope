@@ -26,10 +26,12 @@ const designOverlayFile = requiredElement('design-overlay-file', HTMLInputElemen
 const designOverlayScale = requiredElement('design-overlay-scale', HTMLSelectElement);
 const designOverlayOpacity = requiredElement('design-overlay-opacity', HTMLInputElement);
 const designOverlayBlendModes = requiredRadioGroup('design-overlay-blend');
+const unlockInteractionsButton = requiredElement('unlock-interactions', HTMLButtonElement);
 let tabId: number | null = null;
 let pollTimer: number | null = null;
 let lastCaptureProgress: CaptureProgressState | undefined;
 let designOverlayImageDataUrl: string | null = null;
+let interactionsUnlocked = false;
 
 void initialize();
 
@@ -64,7 +66,7 @@ async function initialize(): Promise<void> {
   }
   if (tabId === null) { showError('현재 탭을 확인할 수 없습니다.'); return; }
   const response = await send({ type: 'GET_TOOL_STATE', tabId });
-  if (response.ok) renderState(response.tool ?? 'idle', response.captureProgress); else showError(response.error, response.code);
+  if (response.ok) renderState(response.tool ?? 'idle', response.captureProgress, response.interactionsUnlocked); else showError(response.error, response.code);
 }
 
 for (const card of accordionCards) {
@@ -75,10 +77,11 @@ for (const button of startButtons) {
     const tool = button.dataset.tool;
     if (tool !== undefined && button.getAttribute('aria-pressed') === 'true') { void deactivate(); return; }
     if (tool === 'color-picker' && getColorPickerScope() === 'screen') { startScreenColorPicker(); return; }
-    if (tool === 'measure' || tool === 'color-picker' || tool === 'capture-element' || tool === 'capture-page' || tool === 'design-overlay') void activate(tool);
+    if (tool === 'measure' || tool === 'color-picker' || tool === 'capture-element' || tool === 'capture-page' || tool === 'design-overlay' || tool === 'css-changes') void activate(tool);
   });
 }
 stopButton.addEventListener('click', () => void deactivate());
+unlockInteractionsButton.addEventListener('click', () => void togglePageInteractionUnlock());
 openFileAccessSettings.addEventListener('click', () => void chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` }));
 copyFormat.addEventListener('change', () => void saveSettings());
 for (const scope of colorPickerScopes) scope.addEventListener('change', () => void saveSettings());
@@ -125,6 +128,12 @@ async function deactivate(): Promise<void> {
   const response = await send({ type: 'DEACTIVATE_TOOL', tabId });
   if (response.ok) renderState('idle'); else showError(response.error, response.code);
 }
+async function togglePageInteractionUnlock(): Promise<void> {
+  if (tabId === null) return;
+  showError('');
+  const response = await send({ type: 'TOGGLE_PAGE_INTERACTION_UNLOCK', tabId });
+  if (response.ok) window.close(); else showError(response.error, response.code);
+}
 function startScreenColorPicker(): void {
   if (tabId === null) return;
   const format = isCopyFormat(copyFormat.value) ? copyFormat.value : DEFAULT_SETTINGS.copyFormat;
@@ -140,7 +149,8 @@ function startScreenColorPicker(): void {
     showError(error instanceof Error ? error.message : String(error));
   });
 }
-function renderState(tool: ToolMode, captureProgress?: CaptureProgressState): void {
+function renderState(tool: ToolMode, captureProgress?: CaptureProgressState, nextInteractionsUnlocked?: boolean): void {
+  if (nextInteractionsUnlocked !== undefined) interactionsUnlocked = nextInteractionsUnlocked;
   const capturing = isCapturingTool(tool);
   const staysOpen = capturing || tool === 'design-overlay';
   if (!capturing) lastCaptureProgress = undefined;
@@ -151,12 +161,15 @@ function renderState(tool: ToolMode, captureProgress?: CaptureProgressState): vo
   captureState.hidden = !capturing;
   renderCaptureProgress(capturing, captureProgress ?? lastCaptureProgress);
   for (const card of toolCards) {
-    const active = card.dataset.toolCard === tool || (card.dataset.toolCard === 'capture' && isCapturingTool(tool));
+    const active = card.dataset.toolCard === tool
+      || (card.dataset.toolCard === 'capture' && isCapturingTool(tool))
+      || (card.dataset.toolCard === 'unlock-interactions' && interactionsUnlocked);
     card.classList.toggle('active', active);
     if (card.dataset.toolCard === 'capture') card.classList.toggle('capturing', capturing);
   }
   for (const button of startButtons) if (button.dataset.tool?.startsWith('capture-') === true) button.disabled = capturing;
   for (const button of startButtons) button.setAttribute('aria-pressed', String(button.dataset.tool === tool));
+  unlockInteractionsButton.setAttribute('aria-pressed', String(interactionsUnlocked));
   if (staysOpen) startPolling(); else stopPolling();
 }
 function renderCaptureProgress(capturing: boolean, progress?: CaptureProgressState): void {
@@ -186,7 +199,7 @@ function stopPolling(): void {
 async function refreshState(): Promise<void> {
   if (tabId === null) return;
   const response = await send({ type: 'GET_TOOL_STATE', tabId });
-  if (response.ok) renderState(response.tool ?? 'idle', response.captureProgress);
+  if (response.ok) renderState(response.tool ?? 'idle', response.captureProgress, response.interactionsUnlocked);
 }
 async function saveSettings(): Promise<void> {
   await chrome.storage.local.set({

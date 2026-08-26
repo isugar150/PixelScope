@@ -3,6 +3,8 @@ import { createCaptureTiles, intersectCaptureRect, shouldSuppressViewportFixed }
 import { isExtensionMessage, type ExtensionMessage, type ExtensionResponse } from './shared/messages';
 import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './shared/capture';
 import type { ToolMode } from './shared/tool-state';
+import { cssBaselineStorageKey, isDevtoolsCssBaseline } from './shared/css-baseline';
+import { installPageInteractionUnlock } from './page-interaction-unlock-main';
 
 class FileAccessRequiredError extends Error {
   readonly code = 'file-access-required' as const;
@@ -40,6 +42,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   captureAbortControllers.get(tabId)?.abort();
   captureAbortControllers.delete(tabId);
   captureProgressStates.delete(tabId);
+  void chrome.storage.session.remove(cssBaselineStorageKey(tabId));
   const captureId = viewerCaptures.get(tabId);
   if (captureId !== undefined) {
     viewerCaptures.delete(tabId);
@@ -55,13 +58,27 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.MessageSender): Promise<ExtensionResponse> {
   switch (message.type) {
+    case 'GET_CSS_BASELINE': {
+      if (sender.tab?.id === undefined) return { ok: true };
+      const key = cssBaselineStorageKey(sender.tab.id);
+      const stored = await chrome.storage.session.get(key);
+      const baseline: unknown = stored[key];
+      return isDevtoolsCssBaseline(baseline) ? { ok: true, cssBaseline: baseline } : { ok: true };
+    }
     case 'GET_TOOL_STATE': {
       if (message.tabId === undefined) return { ok: true, tool: 'idle' };
       const cachedTool = tabStates.get(message.tabId);
       const contentState = await queryContentState(message.tabId);
       const tool = isCapturingTool(cachedTool) ? cachedTool : contentState.tool;
       tabStates.set(message.tabId, tool);
-      return { ok: true, tool, captureProgress: captureProgressStates.get(message.tabId) ?? contentState.captureProgress };
+      return { ok: true, tool, captureProgress: captureProgressStates.get(message.tabId) ?? contentState.captureProgress, interactionsUnlocked: contentState.interactionsUnlocked };
+    }
+    case 'TOGGLE_PAGE_INTERACTION_UNLOCK': {
+      const targetTabId = message.tabId ?? sender.tab?.id;
+      if (targetTabId === undefined) return { ok: false, error: '현재 탭을 확인할 수 없습니다.' };
+      await ensureContentScript(targetTabId);
+      await chrome.scripting.executeScript({ target: { tabId: targetTabId }, world: 'MAIN', func: installPageInteractionUnlock });
+      return await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(targetTabId, { type: 'TOGGLE_PAGE_INTERACTION_UNLOCK' });
     }
     case 'ACTIVATE_TOOL':
       await ensureContentScript(message.tabId);
@@ -271,10 +288,10 @@ async function ensureContentScript(tabId: number): Promise<void> {
 async function sendToolCommand(tabId: number, tool: ToolMode): Promise<void> {
   await chrome.tabs.sendMessage(tabId, { type: 'TOOL_COMMAND', tool } satisfies ExtensionMessage);
 }
-async function queryContentState(tabId: number): Promise<{ tool: ToolMode; captureProgress?: CaptureProgressState }> {
+async function queryContentState(tabId: number): Promise<{ tool: ToolMode; captureProgress?: CaptureProgressState; interactionsUnlocked?: boolean }> {
   try {
     const response = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, { type: 'GET_TOOL_STATE' });
-    return response.ok ? { tool: response.tool ?? 'idle', captureProgress: response.captureProgress } : { tool: 'idle' };
+    return response.ok ? { tool: response.tool ?? 'idle', captureProgress: response.captureProgress, interactionsUnlocked: response.interactionsUnlocked } : { tool: 'idle' };
   } catch { return { tool: 'idle' }; }
 }
 function getErrorMessage(error: unknown): string {

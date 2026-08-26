@@ -1,8 +1,11 @@
 import { isDesignOverlayBlendMode, isDesignOverlayScale, type ActiveTool, type DesignOverlayBlendMode, type DesignOverlayScale, type ToolMode } from './tool-state';
 import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './capture';
+import type { DevtoolsCssBaseline } from './css-baseline';
 
 export type ExtensionMessage =
   | { readonly type: 'GET_TOOL_STATE'; readonly tabId?: number }
+  | { readonly type: 'GET_CSS_BASELINE' }
+  | { readonly type: 'TOGGLE_PAGE_INTERACTION_UNLOCK'; readonly tabId?: number }
   | { readonly type: 'ACTIVATE_TOOL'; readonly tabId: number; readonly tool: ActiveTool }
   | { readonly type: 'DEACTIVATE_TOOL'; readonly tabId: number }
   | { readonly type: 'CAPTURE_VISIBLE_TAB' }
@@ -16,15 +19,17 @@ export type ExtensionMessage =
   | { readonly type: 'TOOL_STATE_CHANGED'; readonly tool: ToolMode };
 
 export type ExtensionResponse =
-  | { readonly ok: true; readonly tool?: ToolMode; readonly dataUrl?: string; readonly captureId?: string; readonly position?: CaptureScrollPosition; readonly captureProgress?: CaptureProgressState }
+  | { readonly ok: true; readonly tool?: ToolMode; readonly dataUrl?: string; readonly captureId?: string; readonly position?: CaptureScrollPosition; readonly captureProgress?: CaptureProgressState; readonly cssBaseline?: DevtoolsCssBaseline; readonly interactionsUnlocked?: boolean }
   | { readonly ok: false; readonly error: string; readonly code?: 'file-access-required' };
 
 export function isExtensionMessage(value: unknown): value is ExtensionMessage {
   if (typeof value !== 'object' || value === null || !('type' in value) || typeof value.type !== 'string') return false;
   switch (value.type) {
     case 'GET_TOOL_STATE':
+    case 'GET_CSS_BASELINE':
     case 'CAPTURE_VISIBLE_TAB':
     case 'CAPTURE_CANCEL': return true;
+    case 'TOGGLE_PAGE_INTERACTION_UNLOCK': return !('tabId' in value) || hasNumber(value, 'tabId');
     case 'ACTIVATE_TOOL':
       return hasNumber(value, 'tabId') && 'tool' in value && isTool(value.tool, false);
     case 'DEACTIVATE_TOOL': return hasNumber(value, 'tabId');
@@ -48,7 +53,7 @@ export function isExtensionMessage(value: unknown): value is ExtensionMessage {
 }
 
 function isTool(value: unknown, allowIdle: boolean): value is ToolMode {
-  return (allowIdle && value === 'idle') || value === 'measure' || value === 'color-picker' || value === 'capture-element' || value === 'capture-page' || value === 'design-overlay';
+  return (allowIdle && value === 'idle') || value === 'measure' || value === 'color-picker' || value === 'capture-element' || value === 'capture-page' || value === 'design-overlay' || value === 'css-changes';
 }
 
 function hasCaptureRect(value: object, key: string): boolean {

@@ -12,6 +12,7 @@ export interface ToolFactories {
   readonly captureElement: () => ToolLifecycle;
   readonly capturePage: () => ToolLifecycle;
   readonly designOverlay: () => ToolLifecycle;
+  readonly cssChanges: () => ToolLifecycle;
 }
 
 export class ToolController {
@@ -29,7 +30,8 @@ export class ToolController {
       : tool === 'color-picker' ? this.#factories.colorPicker()
         : tool === 'capture-element' ? this.#factories.captureElement()
           : tool === 'design-overlay' ? this.#factories.designOverlay()
-            : this.#factories.capturePage();
+            : tool === 'css-changes' ? this.#factories.cssChanges()
+              : this.#factories.capturePage();
     this.#current = instance;
     this.#mode = tool;
     try { await instance.enable(); }

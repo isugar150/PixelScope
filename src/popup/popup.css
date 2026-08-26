@@ -102,6 +102,8 @@ h1 {
 .tool-card:nth-of-type(2) { animation-delay: 40ms; }
 .tool-card:nth-of-type(3) { animation-delay: 80ms; }
 .tool-card:nth-of-type(4) { animation-delay: 120ms; }
+.tool-card:nth-of-type(5) { animation-delay: 160ms; }
+.tool-card:nth-of-type(6) { animation-delay: 200ms; }
 @keyframes card-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
@@ -112,6 +114,8 @@ h1 {
   box-shadow: inset 3px 0 var(--accent-strong);
 }
 .tool-row { display: grid; grid-template-columns: minmax(0, 1fr) 52px; min-height: 52px; }
+.tool-row.single { grid-template-columns: minmax(0, 1fr); }
+.tool-row.single .tool-launch { border-right: 0; }
 .tool-launch {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
@@ -129,6 +133,17 @@ h1 {
 .tool-launch:hover { background: var(--panel-hover); }
 .tool-launch:active { background: var(--accent-soft-strong); transform: scale(0.99); }
 .tool-launch b, .capture-head b { font-size: 13px; line-height: 1.2; }
+.tool-launch.has-shortcut { grid-template-columns: 28px minmax(0, 1fr) auto; }
+.tool-launch kbd {
+  padding: 3px 6px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--canvas);
+  color: var(--text);
+  font: 600 11px/1.1 "Segoe UI", system-ui, sans-serif;
+  white-space: nowrap;
+}
 .tool-more {
   display: grid;
   place-items: center;

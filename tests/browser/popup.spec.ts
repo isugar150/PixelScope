@@ -36,6 +36,10 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.locator('.app-logo')).toHaveAttribute('src', '/icons/icon-48.png');
     await expect(page.getByRole('button', { name: '영역 측정', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '컬러 피커', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'CSS 변경 추출', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'CSS 변경 추출', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByRole('button', { name: '우클릭·드래그 해제', exact: true })).toHaveAttribute('aria-keyshortcuts', 'Alt+`');
+    await expect(page.getByRole('button', { name: '우클릭·드래그 해제', exact: true })).toHaveAttribute('aria-pressed', 'false');
     await expect(page.locator('#status')).toHaveCount(0);
     await expect(page.locator('.summary-copy small, .capture-actions small')).toHaveCount(0);
     const measureMore = page.locator('button[aria-controls="measure-options"]');
@@ -89,6 +93,8 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.locator('#stop')).toBeVisible();
     await expect(page.locator('[data-tool-card="measure"]')).toBeHidden();
     await expect(page.locator('[data-tool-card="color-picker"]')).toBeHidden();
+    await expect(page.locator('[data-tool-card="css-changes"]')).toBeHidden();
+    await expect(page.locator('[data-tool-card="unlock-interactions"]')).toBeHidden();
     await expect(page.locator('[data-tool-card="capture"]')).toBeHidden();
     await page.keyboard.press('Tab');
     await expect(page.locator(':focus')).toBeVisible();
@@ -125,6 +131,46 @@ test('screen picker opens directly inside the trusted popup click', async () => 
     await page.getByRole('button', { name: '컬러 피커', exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as Window & { screenPickerUserActivation?: boolean }).screenPickerUserActivation)).toBe(true);
     await expect(page.locator('#error')).toHaveText('');
+  } finally { await context.close(); }
+});
+
+test('Alt+Backquote unlock shortcut shows a temporary page status toast', async () => {
+  const extensionPath = resolve(import.meta.dirname, '../../dist');
+  const context = await chromium.launchPersistentContext('', {
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    const page = await context.newPage();
+    await page.setContent('<p>Protected page text</p>');
+    await page.evaluate(() => {
+      const testWindow = window as Window & { unlockListener?: (...args: unknown[]) => unknown };
+      Object.defineProperty(window.chrome, 'runtime', { configurable: true, value: {
+        onMessage: {
+          addListener: (listener: (...args: unknown[]) => unknown) => { testWindow.unlockListener = listener; },
+          removeListener: () => undefined,
+        },
+        sendMessage: (message: { type?: string }) => {
+          if (message.type === 'TOGGLE_PAGE_INTERACTION_UNLOCK') testWindow.unlockListener?.(message, {}, () => undefined);
+          return Promise.resolve({ ok: true });
+        },
+      } });
+      Object.defineProperty(window.chrome, 'storage', { configurable: true, value: { local: { get: () => Promise.resolve({}) } } });
+    });
+    await page.addScriptTag({ path: resolve(extensionPath, 'content.js') });
+    await page.addScriptTag({ path: resolve(extensionPath, 'shortcut-listener.js') });
+
+    await page.keyboard.press('Alt+Backquote');
+
+    await expect(page.locator('html')).toHaveAttribute('data-pixelscope-interactions-unlocked', '');
+    await expect(page.locator('[data-pixelscope-interaction-unlock-toast]')).toHaveCount(1);
+    await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => element.shadowRoot?.textContent ?? '')).toContain('우클릭·드래그 해제 켜짐');
+    await expect(page.locator('[data-pixelscope-interaction-unlock-toast]')).toHaveCount(0, { timeout: 4_000 });
+    await expect(page.locator('html')).toHaveAttribute('data-pixelscope-interactions-unlocked', '');
+
+    await page.keyboard.press('Alt+Backquote');
+    await expect(page.locator('html')).not.toHaveAttribute('data-pixelscope-interactions-unlocked', '');
+    await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => element.shadowRoot?.textContent ?? '')).toContain('우클릭·드래그 해제 꺼짐');
   } finally { await context.close(); }
 });
 

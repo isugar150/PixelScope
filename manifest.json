@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PixelScope - 웹 개발 유틸 모음",
   "short_name": "PixelScope",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Measure page regions, inspect colors, and capture page content without changing page layout.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -11,10 +11,19 @@
     "128": "icons/icon-128.png"
   },
   "permissions": ["activeTab", "scripting", "storage", "clipboardWrite"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["shortcut-listener.js"],
+      "run_at": "document_start"
+    }
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
+  "devtools_page": "src/devtools/devtools.html",
   "action": {
     "default_title": "PixelScope 도구",
     "default_popup": "src/popup/popup.html",

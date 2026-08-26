@@ -1,4 +1,4 @@
-export type ToolMode = 'idle' | 'measure' | 'color-picker' | 'capture-element' | 'capture-page' | 'design-overlay';
+export type ToolMode = 'idle' | 'measure' | 'color-picker' | 'capture-element' | 'capture-page' | 'design-overlay' | 'css-changes';
 export type ActiveTool = Exclude<ToolMode, 'idle'>;
 export type CopyFormat = 'hex' | 'rgb' | 'hsl';
 export type MeasurementUnit = 'px' | 'rem' | 'viewport';
