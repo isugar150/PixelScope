@@ -16,6 +16,12 @@
 body {
   margin: 0;
   min-width: 320px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+input {
+  user-select: text;
+  -webkit-user-select: text;
 }
 button,
 input {
