@@ -40,6 +40,16 @@ export class CaptureOverlay {
     const labelTop = rect.top > 34 ? rect.top - 30 : rect.top + 6;
     this.#label.style.transform = `translate3d(${String(Math.max(8, Math.min(rect.left, innerWidth - 280)))}px,${String(Math.max(8, labelTop))}px,0)`;
   }
+  public renderArea(rect: CaptureRect): void {
+    this.#box.style.cssText = `display:block;left:${String(rect.left)}px;top:${String(rect.top)}px;width:${String(rect.width)}px;height:${String(rect.height)}px`;
+    this.#label.textContent = `${String(Math.round(rect.width))} × ${String(Math.round(rect.height))} px · 놓아서 캡처`;
+    this.#label.style.display = 'block';
+    const labelTop = rect.top > 34 ? rect.top - 30 : rect.top + 6;
+    this.#label.style.transform = `translate3d(${String(Math.max(8, Math.min(rect.left, innerWidth - 280)))}px,${String(Math.max(8, labelTop))}px,0)`;
+  }
+  public capturePointer(pointerId: number): void { try { this.#host.setPointerCapture(pointerId); } catch { /* Capture is best effort. */ } }
+  public releasePointer(pointerId: number): void { if (this.#host.hasPointerCapture(pointerId)) this.#host.releasePointerCapture(pointerId); }
+  public hideElement(): void { this.#box.style.display = 'none'; this.#label.style.display = 'none'; }
   public showPreparing(rect: CaptureRect): void {
     this.#box.style.display = 'none'; this.#label.style.display = 'none';
     this.#progress.style.display = 'block'; this.#status.textContent = '캡처 페이지 계산 중'; this.#count.textContent = '준비 중';

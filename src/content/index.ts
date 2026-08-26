@@ -1,7 +1,8 @@
 import type { ExtensionMessage, ExtensionResponse } from '../shared/messages';
-import type { ToolMode } from '../shared/tool-state';
+import type { DesignOverlayBlendMode, DesignOverlayScale, ToolMode } from '../shared/tool-state';
 import { ColorPickerController } from './color-picker/color-picker-controller';
 import { CaptureController } from './capture/capture-controller';
+import { DesignOverlayController } from './design-overlay/design-overlay-controller';
 import { MeasureController } from './measure-controller';
 import { ToolController } from './tool-controller';
 
@@ -36,8 +37,13 @@ const controller = new ToolController({
     captureController = new CaptureController('page', exit);
     return captureController;
   },
+  designOverlay: () => {
+    designOverlayController = new DesignOverlayController(exit);
+    return designOverlayController;
+  },
 });
 let captureController: CaptureController | null = null;
+let designOverlayController: DesignOverlayController | null = null;
 
 const onMessage = (message: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: ExtensionResponse) => void): boolean => {
   if (!isContentMessage(message)) return false;
@@ -53,6 +59,11 @@ const onMessage = (message: unknown, _sender: chrome.runtime.MessageSender, send
   }
   if (message.type === 'CAPTURE_PROGRESS') {
     captureController?.updateProgress(message.completed, message.total);
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (message.type === 'DESIGN_OVERLAY_UPDATE') {
+    designOverlayController?.updateSettings(message.imageDataUrl, message.opacity, message.blendMode, message.scale);
     sendResponse({ ok: true });
     return false;
   }
@@ -88,7 +99,8 @@ function isContentMessage(value: unknown): value is
   | { type: 'GET_TOOL_STATE' }
   | { type: 'TOOL_COMMAND'; tool: ToolMode }
   | { type: 'CAPTURE_SCROLL_TO'; position: { x: number; y: number }; suppressViewportFixed: boolean }
-  | { type: 'CAPTURE_PROGRESS'; completed: number; total: number } {
+  | { type: 'CAPTURE_PROGRESS'; completed: number; total: number }
+  | { type: 'DESIGN_OVERLAY_UPDATE'; opacity: number; blendMode: DesignOverlayBlendMode; scale: DesignOverlayScale; imageDataUrl?: string } {
   if (typeof value !== 'object' || value === null || !('type' in value)) return false;
   if (value.type === 'GET_TOOL_STATE') return true;
   if (value.type === 'TOOL_COMMAND' && 'tool' in value) return isToolMode(value.tool);
@@ -96,11 +108,17 @@ function isContentMessage(value: unknown): value is
     return 'x' in value.position && typeof value.position.x === 'number' && 'y' in value.position && typeof value.position.y === 'number'
       && 'suppressViewportFixed' in value && typeof value.suppressViewportFixed === 'boolean';
   }
-  return value.type === 'CAPTURE_PROGRESS' && 'completed' in value && typeof value.completed === 'number' && 'total' in value && typeof value.total === 'number';
+  if (value.type === 'CAPTURE_PROGRESS') {
+    return 'completed' in value && typeof value.completed === 'number' && 'total' in value && typeof value.total === 'number';
+  }
+  return value.type === 'DESIGN_OVERLAY_UPDATE' && 'opacity' in value && typeof value.opacity === 'number'
+    && 'scale' in value && typeof value.scale === 'string' && ['fit', '0.5', '1', '1.5', '2', '3'].includes(value.scale)
+    && 'blendMode' in value && (value.blendMode === 'normal' || value.blendMode === 'difference')
+    && (!('imageDataUrl' in value) || typeof value.imageDataUrl === 'string');
 }
 
 function isToolMode(value: unknown): value is ToolMode {
-  return value === 'idle' || value === 'measure' || value === 'color-picker' || value === 'capture-element' || value === 'capture-page';
+  return value === 'idle' || value === 'measure' || value === 'color-picker' || value === 'capture-element' || value === 'capture-page' || value === 'design-overlay';
 }
 
 function removeStaleArtifacts(): void {

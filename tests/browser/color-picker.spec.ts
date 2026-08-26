@@ -61,7 +61,14 @@ test('page color picker locks once, restores the cursor, and exposes per-format 
     await page.mouse.move(400, 588);
     await expect(overlay).toHaveAttribute('data-pixelscope-panel-position', 'top');
 
-    await page.mouse.click(400, 300);
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: 400, y: 300 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: 400, y: 240 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await expect(overlay).toHaveAttribute('data-pixelscope-picker-state', 'sampling');
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 2, x: 400, y: 300 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await expect.poll(() => page.evaluate(() => (window as Window & { pageClicks?: number }).pageClicks)).toBe(0);
     await expect(overlay).toHaveAttribute('data-pixelscope-picker-state', 'locked');
     await expect(overlay).toHaveAttribute('data-pixelscope-pointer-aids', 'hidden');

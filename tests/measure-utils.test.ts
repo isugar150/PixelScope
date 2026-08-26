@@ -1,8 +1,22 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { calculateMagnifierPosition, describeElement, elementRect, findInspectableElement, formatMeasurement, isAreaDrag } from '../src/content/measure-utils';
+import { calculateSelectionGuidePosition, formatMeasurementInfo } from '../src/content/overlay';
 
 describe('measure interaction helpers', () => {
+  it('moves the selection guide away from the pointer at both viewport edges', () => {
+    expect(calculateSelectionGuidePosition('top', 20, { top: 8, bottom: 44 }, 800)).toBe('bottom');
+    expect(calculateSelectionGuidePosition('bottom', 400, { top: 756, bottom: 792 }, 800)).toBe('bottom');
+    expect(calculateSelectionGuidePosition('bottom', 750, { top: 756, bottom: 792 }, 800)).toBe('top');
+  });
+
+  it('keeps area info compact and only shows coordinates when enabled', () => {
+    const rect = { left: 12, top: 34, width: 100, height: 50 };
+    expect(formatMeasurementInfo(rect, 'px', false)).toBe('100 × 50 px');
+    expect(formatMeasurementInfo(rect, 'px', true)).toBe('100 × 50 px · X 12px · Y 34px');
+    expect(formatMeasurementInfo(rect, 'px', false, 'Element', 'div.card')).toBe('Element · div.card · 100 × 50 px');
+  });
+
   it('treats movement up to 4px as a click and larger movement as a drag', () => {
     expect(isAreaDrag({ x: 0, y: 0 }, { x: 4, y: 0 })).toBe(false);
     expect(isAreaDrag({ x: 0, y: 0 }, { x: 4.1, y: 0 })).toBe(true);

@@ -3,6 +3,48 @@ import type { MeasurementUnit } from '../shared/tool-state';
 
 export const DRAG_THRESHOLD = 4;
 
+type ScrollAnchor = { readonly kind: 'window' } | { readonly kind: 'element'; readonly node: Element };
+interface ScrollSnapshotEntry { readonly anchor: ScrollAnchor; readonly x: number; readonly y: number }
+export type ScrollSnapshot = readonly ScrollSnapshotEntry[];
+
+/**
+ * Walks the ancestor chain under `point` and records the scroll offset of every scrollable
+ * container (e.g. a modal dialog's own scrollable body), plus the window itself. This lets a
+ * saved area measurement stay visually anchored to its content even when it sits inside a
+ * container that scrolls independently of the page.
+ */
+export function captureScrollSnapshot(point: Point, overlayHost?: Element | null): ScrollSnapshot {
+  const snapshot: ScrollSnapshotEntry[] = [];
+  let node: Element | null = document.elementFromPoint(point.x, point.y);
+  while (node !== null) {
+    if (node === overlayHost) break;
+    if (isScrollableElement(node)) snapshot.push({ anchor: { kind: 'element', node }, x: node.scrollLeft, y: node.scrollTop });
+    node = node.parentElement;
+  }
+  snapshot.push({ anchor: { kind: 'window' }, x: window.scrollX, y: window.scrollY });
+  return snapshot;
+}
+
+export function resolveScrollDelta(snapshot: ScrollSnapshot): Point {
+  let x = 0, y = 0;
+  for (const entry of snapshot) {
+    if (entry.anchor.kind === 'window') { x += window.scrollX - entry.x; y += window.scrollY - entry.y; continue; }
+    if (!entry.anchor.node.isConnected) continue;
+    x += entry.anchor.node.scrollLeft - entry.x;
+    y += entry.anchor.node.scrollTop - entry.y;
+  }
+  return { x, y };
+}
+
+export function resolveAreaViewportRect(area: { readonly viewportRect: Rect; readonly scrollSnapshot: ScrollSnapshot }): Rect {
+  const delta = resolveScrollDelta(area.scrollSnapshot);
+  return { ...area.viewportRect, left: area.viewportRect.left - delta.x, top: area.viewportRect.top - delta.y };
+}
+
+function isScrollableElement(element: Element): boolean {
+  return element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1;
+}
+
 export function isAreaDrag(start: Point, current: Point, threshold = DRAG_THRESHOLD): boolean {
   return Math.hypot(current.x - start.x, current.y - start.y) > threshold;
 }
@@ -40,6 +82,24 @@ export function describeElement(element: Element): string {
 export function formatCssPixels(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+export interface BoxModelSides { readonly top: number; readonly right: number; readonly bottom: number; readonly left: number }
+export interface BoxModel { readonly margin: BoxModelSides; readonly border: BoxModelSides; readonly padding: BoxModelSides }
+
+export function measureBoxModel(element: Element): BoxModel {
+  const style = getComputedStyle(element);
+  return {
+    margin: { top: cssPixelValue(style.marginTop), right: cssPixelValue(style.marginRight), bottom: cssPixelValue(style.marginBottom), left: cssPixelValue(style.marginLeft) },
+    border: { top: cssPixelValue(style.borderTopWidth), right: cssPixelValue(style.borderRightWidth), bottom: cssPixelValue(style.borderBottomWidth), left: cssPixelValue(style.borderLeftWidth) },
+    padding: { top: cssPixelValue(style.paddingTop), right: cssPixelValue(style.paddingRight), bottom: cssPixelValue(style.paddingBottom), left: cssPixelValue(style.paddingLeft) },
+  };
+}
+
+
+function cssPixelValue(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 export function formatMeasurement(width: number, height: number, unit: MeasurementUnit): string {

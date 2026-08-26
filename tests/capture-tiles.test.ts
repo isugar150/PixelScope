@@ -40,11 +40,12 @@ describe('capture tile planning', () => {
     expect(tiles.map((tile) => tile.position)).toEqual([{ x: 40, y: 700 }]);
   });
 
-  it('suppresses viewport-fixed elements on every object tile but keeps the first page tile', () => {
-    expect(shouldSuppressViewportFixed({ x: 0, y: 500 }, 0)).toBe(true);
-    expect(shouldSuppressViewportFixed({ x: 0, y: 500 }, 1)).toBe(true);
-    expect(shouldSuppressViewportFixed(undefined, 0)).toBe(false);
-    expect(shouldSuppressViewportFixed(undefined, 1)).toBe(true);
+  it('suppresses viewport-fixed elements on every object tile but keeps every tile in the first page row', () => {
+    expect(shouldSuppressViewportFixed({ x: 0, y: 500 }, { x: 0, y: 500 }, 500)).toBe(true);
+    expect(shouldSuppressViewportFixed({ x: 0, y: 500 }, { x: 500, y: 500 }, 500)).toBe(true);
+    expect(shouldSuppressViewportFixed(undefined, { x: 0, y: 0 }, 0)).toBe(false);
+    expect(shouldSuppressViewportFixed(undefined, { x: 500, y: 0 }, 0)).toBe(false);
+    expect(shouldSuppressViewportFixed(undefined, { x: 0, y: 600 }, 0)).toBe(true);
   });
 
   it('starts an oversized object capture at the current viewport and then covers the remainder', () => {

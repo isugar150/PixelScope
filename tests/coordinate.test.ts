@@ -3,6 +3,7 @@ import {
   calculateAutoScroll,
   clampLabelPosition,
   documentToViewport,
+  isPointInsideRect,
   rectangleFromPoints,
   viewportToDocument,
 } from '../src/content/coordinate';
@@ -18,6 +19,13 @@ describe('coordinate conversion', () => {
 });
 
 describe('rectangle measurement', () => {
+  it('detects points inside a rectangle including its edges', () => {
+    const rect = { left: 10, top: 20, width: 30, height: 40 };
+    expect(isPointInsideRect({ x: 10, y: 20 }, rect)).toBe(true);
+    expect(isPointInsideRect({ x: 40, y: 60 }, rect)).toBe(true);
+    expect(isPointInsideRect({ x: 41, y: 60 }, rect)).toBe(false);
+  });
+
   it('calculates a forward drag rectangle and dimensions', () => {
     expect(rectangleFromPoints({ x: 10, y: 20 }, { x: 110, y: 70 })).toEqual({
       left: 10, top: 20, width: 100, height: 50,

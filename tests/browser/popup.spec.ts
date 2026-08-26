@@ -49,7 +49,9 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.getByRole('button', { name: '영역 측정', exact: true })).toHaveAttribute('aria-pressed', 'false');
     await measureMore.click();
     await expect(measureMore).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByLabel('X/Y 좌표 표시')).not.toBeChecked();
     await page.getByLabel('측정 단위').selectOption('rem');
+    await page.getByLabel('X/Y 좌표 표시').check();
     await colorMore.click();
     await expect(measureMore).toHaveAttribute('aria-expanded', 'false');
     await expect(colorMore).toHaveAttribute('aria-expanded', 'true');
@@ -75,6 +77,7 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.getByRole('radio', { name: '웹페이지만' })).toBeChecked();
     await expect(page.getByLabel('복사 형식')).toHaveValue('rgb');
     await expect(page.getByLabel('측정 단위')).toHaveValue('rem');
+    await expect(page.getByLabel('X/Y 좌표 표시')).toBeChecked();
     await page.evaluate(() => {
       document.body.classList.add('capture-running');
       const captureState = document.getElementById('capture-state');
@@ -220,6 +223,46 @@ test('capture viewer loads ephemeral PNG and supports pixel-accurate crop and ex
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.keyboard.press('Escape');
     await expect(page.locator('#crop-toolbar')).toBeHidden();
+
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.evaluate(async () => {
+      const canvas = document.createElement('canvas'); canvas.width = 400; canvas.height = 2000;
+      const context = canvas.getContext('2d'); if (context === null) throw new Error('canvas unavailable');
+      context.fillStyle = '#0f172a'; context.fillRect(0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob>((resolveBlob, reject) => canvas.toBlob((value) => value === null ? reject(new Error('blob unavailable')) : resolveBlob(value), 'image/png'));
+      const database = await new Promise<IDBDatabase>((resolveDatabase, reject) => {
+        const request = indexedDB.open('pixelscope-captures', 1);
+        request.onsuccess = () => resolveDatabase(request.result); request.onerror = () => reject(request.error ?? new Error('database unavailable'));
+      });
+      await new Promise<void>((resolveWrite, reject) => {
+        const transaction = database.transaction('captures', 'readwrite');
+        transaction.objectStore('captures').put({ id: 'viewer-tall-test', blob, width: 400, height: 2000, title: 'Tall viewer test', createdAt: Date.now() });
+        transaction.oncomplete = () => resolveWrite(); transaction.onerror = () => reject(transaction.error ?? new Error('write unavailable'));
+      });
+      database.close();
+    });
+    await page.goto(`chrome-extension://${extensionId}/src/viewer/viewer.html?id=viewer-tall-test`);
+    await expect(page.getByAltText('캡처 결과')).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, 850));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(500);
+    await page.getByRole('button', { name: '크롭', exact: true }).click();
+    const expectedVisibleCropY = await page.evaluate(() => {
+      const image = document.getElementById('capture');
+      const header = document.getElementById('viewer-header');
+      if (!(image instanceof HTMLImageElement) || !(header instanceof HTMLElement)) throw new Error('viewer geometry unavailable');
+      const imageRect = image.getBoundingClientRect();
+      const visibleTop = Math.max(imageRect.top, 0, header.getBoundingClientRect().bottom);
+      const visibleBottom = Math.min(imageRect.bottom, window.innerHeight);
+      const sourceCenterY = ((visibleTop + visibleBottom) / 2 - imageRect.top) * 2000 / imageRect.height;
+      return Math.min(1900, Math.max(0, Math.floor(sourceCenterY - 50)));
+    });
+    expect(expectedVisibleCropY).not.toBe(950);
+    await expect(page.locator('#crop-y')).toHaveValue(String(expectedVisibleCropY));
+    const tallSelectionBounds = await page.locator('#crop-selection').boundingBox();
+    const tallHeaderBounds = await page.locator('#viewer-header').boundingBox();
+    if (tallSelectionBounds === null || tallHeaderBounds === null) throw new Error('visible crop bounds unavailable');
+    expect(tallSelectionBounds.y).toBeGreaterThan(tallHeaderBounds.y + tallHeaderBounds.height);
+    expect(tallSelectionBounds.y + tallSelectionBounds.height).toBeLessThanOrEqual(600);
   } finally { await context.close(); }
 });
 
@@ -266,8 +309,10 @@ test('object capture suppresses a fixed header and restores page styles', async 
       const listener = (window as Window & { captureListener?: (...args: unknown[]) => unknown }).captureListener;
       await new Promise<void>((resolveActivation) => listener?.({ type: 'TOOL_COMMAND', tool: 'capture-element' }, {}, () => resolveActivation()));
     });
-    await page.mouse.move(300, 200);
-    await page.mouse.click(300, 200);
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: 300, y: 200 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await expect.poll(() => page.evaluate(() => (window as Window & { captureRequested?: boolean }).captureRequested)).toBe(true);
     await expect.poll(() => page.evaluate(() => {
       const request = (window as Window & { captureRequest?: { viewport?: { width?: number }; screenshotViewport?: { width?: number } } }).captureRequest;
@@ -334,7 +379,7 @@ test('measure mode blocks page clicks and Escape restores the page', async () =>
     const cdp = await context.newCDPSession(page);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-    await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><a id="target" href="#clicked" style="display:block;width:160px;height:80px">Target</a><div style="height:2000px"></div>');
+    await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><a id="target" href="#clicked" style="display:block;width:160px;height:80px"><span id="child" style="display:block;width:60px;height:30px">Target</span></a><div style="height:2000px"></div>');
     await page.evaluate(() => {
       const testWindow = window as Window & { measureListener?: (...args: unknown[]) => unknown; linkClicks?: number };
       testWindow.linkClicks = 0;
@@ -359,16 +404,40 @@ test('measure mode blocks page clicks and Escape restores the page', async () =>
         testWindow.measureListener?.({ type: 'TOOL_COMMAND', tool: 'measure' }, {}, () => resolveActivation());
       });
     });
-    await page.mouse.move(40, 30);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-selection-mode', 'active');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-guide-position', 'top');
+    await page.mouse.move(140, 10);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-guide-position', 'bottom');
+    await page.mouse.move(140, 830);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-guide-position', 'top');
+    await page.mouse.move(140, 70);
     await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'element-hover');
-    await page.locator('#target').click({ position: { x: 40, y: 30 } });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 8, x: 140, y: 70 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await expect.poll(() => page.evaluate(() => (window as Window & { linkClicks?: number }).linkClicks)).toBe(0);
-    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'element-locked');
-    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-pointer-aids', 'hidden');
-    await page.mouse.move(40, 30); await page.mouse.down(); await page.mouse.move(120, 90, { steps: 3 }); await page.mouse.up();
-    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'element-locked');
-    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '1');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-coordinates-visible', 'false');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-pointer-aids', 'visible');
+    await page.mouse.move(140, 70);
     await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'idle');
+    await page.mouse.click(140, 70);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '0');
+    await page.mouse.click(140, 70);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '1');
+    await page.mouse.move(20, 15);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'element-hover');
+    await page.mouse.click(20, 15);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '2');
+    await page.mouse.move(20, 15);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'idle');
+    await page.mouse.move(200, 120); await page.mouse.down(); await page.mouse.move(300, 180, { steps: 3 }); await page.mouse.up();
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '3');
+    await page.mouse.move(250, 150);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'idle');
+    await page.mouse.click(250, 150);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '2');
+    await page.mouse.move(200, 120); await page.mouse.down(); await page.mouse.move(300, 180, { steps: 3 }); await page.mouse.up();
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '3');
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: 80, y: 180 }] });
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: 80, y: 60 }] });
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
@@ -384,33 +453,24 @@ test('measure mode blocks page clicks and Escape restores the page', async () =>
       dispatch('pointermove', 80, 60);
       dispatch('pointerup', 80, 60);
     });
-    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'area');
-    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-pointer-aids', 'hidden');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '4');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-pointer-aids', 'visible');
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-    await expect(page.locator('html')).not.toHaveAttribute('data-pixelscope-touch-drag');
-    const areaTopBeforeScroll = await page.locator('[data-pixelscope-overlay]').evaluate((host) => {
-      const box = host.shadowRoot?.querySelector<HTMLElement>('.box');
-      return Number.parseFloat(box?.style.top ?? 'NaN');
-    });
-    const visibilityMutations = await page.locator('[data-pixelscope-overlay]').evaluate(async (host) => new Promise<number>((resolveMutations) => {
-      let mutations = 0;
-      const observer = new MutationObserver(() => { mutations += 1; });
-      observer.observe(host, { attributes: true, attributeFilter: ['style'] });
-      window.scrollTo(0, 300);
-      window.setTimeout(() => { observer.disconnect(); resolveMutations(mutations); }, 350);
-    }));
-    expect(visibilityMutations).toBe(0);
-    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'area');
+    await expect(page.locator('html')).toHaveAttribute('data-pixelscope-touch-drag', '');
+    await page.evaluate(() => window.scrollTo(0, 300));
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '4');
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(300);
-    await expect.poll(() => page.locator('[data-pixelscope-overlay]').evaluate((host) => {
-      const box = host.shadowRoot?.querySelector<HTMLElement>('.box');
-      return Number.parseFloat(box?.style.top ?? 'NaN');
-    })).toBe(areaTopBeforeScroll - 300);
     await page.keyboard.press('Escape');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-selection-mode', 'viewing');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '4');
+    await expect(page.locator('html')).not.toHaveAttribute('data-pixelscope-touch-drag');
+    await expect.poll(() => page.locator('html').evaluate((element) => getComputedStyle(element).cursor)).not.toBe('crosshair');
     await page.evaluate(() => window.scrollTo(0, 0));
-    await page.locator('#target').dispatchEvent('pointerdown', { pointerId: 7, pointerType: 'touch', isPrimary: true, button: 0, clientX: 40, clientY: 30 });
-    await page.locator('#target').dispatchEvent('pointerup', { pointerId: 7, pointerType: 'touch', isPrimary: true, button: 0, clientX: 40, clientY: 30 });
-    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-mode', 'element-locked');
+    await page.locator('#target').click({ position: { x: 140, y: 70 } });
+    await expect.poll(() => page.evaluate(() => (window as Window & { linkClicks?: number }).linkClicks)).toBe(1);
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-measurement-count', '4');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveCount(0);
     await page.addScriptTag({ path: resolve(extensionPath, 'content.js') });
     await expect(page.locator('[data-pixelscope-overlay]')).toHaveCount(0);
     await page.evaluate(async () => {
@@ -422,8 +482,10 @@ test('measure mode blocks page clicks and Escape restores the page', async () =>
     await page.mouse.move(40, 30);
     await expect(page.locator('[data-pixelscope-overlay]')).toHaveCount(1);
     await page.keyboard.press('Escape');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-selection-mode', 'viewing');
+    await page.keyboard.press('Escape');
     await expect(page.locator('[data-pixelscope-overlay]')).toHaveCount(0);
     await page.locator('#target').click();
-    await expect.poll(() => page.evaluate(() => (window as Window & { linkClicks?: number }).linkClicks)).toBe(1);
+    await expect.poll(() => page.evaluate(() => (window as Window & { linkClicks?: number }).linkClicks)).toBe(2);
   } finally { await context.close(); }
 });

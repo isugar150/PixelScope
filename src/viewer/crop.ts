@@ -10,18 +10,46 @@ export interface CropSize {
 
 export interface CropRect extends CropPoint, CropSize {}
 
+export interface CropViewportRect {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
 export type CropHandle = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw';
 export type CropInteraction = 'move' | CropHandle;
 
-export function createInitialCropRect(bounds: CropSize, preferredSize = 100): CropRect {
+export function createInitialCropRect(bounds: CropSize, preferredSize = 100, center?: CropPoint): CropRect {
   const width = Math.max(1, Math.min(Math.floor(preferredSize), bounds.width));
   const height = Math.max(1, Math.min(Math.floor(preferredSize), bounds.height));
+  const centerX = center?.x ?? bounds.width / 2;
+  const centerY = center?.y ?? bounds.height / 2;
   return {
-    x: Math.floor((bounds.width - width) / 2),
-    y: Math.floor((bounds.height - height) / 2),
+    x: clamp(Math.floor(centerX - width / 2), 0, bounds.width - width),
+    y: clamp(Math.floor(centerY - height / 2), 0, bounds.height - height),
     width,
     height,
   };
+}
+
+export function visibleImageCenter(
+  imageRect: Pick<DOMRectReadOnly, 'left' | 'top' | 'width' | 'height'>,
+  viewportRect: CropViewportRect,
+  imageSize: CropSize,
+): CropPoint {
+  const visibleLeft = Math.max(imageRect.left, viewportRect.left);
+  const visibleTop = Math.max(imageRect.top, viewportRect.top);
+  const visibleRight = Math.min(imageRect.left + imageRect.width, viewportRect.right);
+  const visibleBottom = Math.min(imageRect.top + imageRect.height, viewportRect.bottom);
+  if (visibleRight <= visibleLeft || visibleBottom <= visibleTop) {
+    return { x: imageSize.width / 2, y: imageSize.height / 2 };
+  }
+  return imagePointFromViewport(
+    { x: (visibleLeft + visibleRight) / 2, y: (visibleTop + visibleBottom) / 2 },
+    imageRect,
+    imageSize,
+  );
 }
 
 export function adjustCropRect(

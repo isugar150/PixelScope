@@ -176,7 +176,7 @@ h1 {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.start b { font-size: 12px; }
+.start b { font-size: 12px; word-break: keep-all; }
 
 .settings-panel { border-top: 0 solid var(--line); background: #091421; }
 .settings-panel.open { border-top-width: 1px; }
@@ -191,6 +191,15 @@ h1 {
   font-size: 12px;
 }
 .settings-panel .setting-row + .setting-row { border-top: 1px solid #1d3043; }
+.checkbox-row { cursor: pointer; }
+.checkbox-row input {
+  width: 20px;
+  height: 20px;
+  margin: 0 8px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.checkbox-row input:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .scope-segmented {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -246,6 +255,31 @@ select {
   color: var(--text);
   cursor: pointer;
 }
+input[type="file"] {
+  max-width: 152px;
+  color: #9eb2c6;
+  font-size: 11px;
+  cursor: pointer;
+}
+input[type="file"]::file-selector-button {
+  margin-right: 8px;
+  padding: 6px 10px;
+  border: 1px solid #3a5671;
+  border-radius: 5px;
+  background: #0c1b2b;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+input[type="file"]::file-selector-button:hover { background: #122a43; }
+input[type="range"] {
+  width: 140px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+input[type="range"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 
 .capture-state {
   margin: 0 0 9px;
@@ -298,6 +332,31 @@ button:focus-visible, select:focus-visible {
 }
 #error:empty { display: none; }
 [hidden] { display: none !important; }
+
+.file-access-guide {
+  margin: 9px 2px 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.file-access-guide p { margin: 0; font-size: 12px; line-height: 1.4; }
+.file-access-guide button {
+  align-self: flex-start;
+  padding: 7px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-hover);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.file-access-guide button:hover { background: var(--panel-active); }
+.file-access-guide button:active { background: var(--panel-active); }
 
 @media (prefers-reduced-motion: reduce) {
   .tool-launch, .tool-more, .tool-more svg, .tool-panel, .settings-panel, .scope-option span, .start, .stop, .capture-track span { transition: none; }

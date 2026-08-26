@@ -4,6 +4,17 @@ import { isExtensionMessage, type ExtensionMessage, type ExtensionResponse } fro
 import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './shared/capture';
 import type { ToolMode } from './shared/tool-state';
 
+class FileAccessRequiredError extends Error {
+  readonly code = 'file-access-required' as const;
+  constructor() { super('이 페이지에서는 PixelScope를 실행할 수 없습니다.'); }
+}
+function isCapturingTool(tool: ToolMode | undefined): tool is 'capture-element' | 'capture-page' {
+  return tool === 'capture-element' || tool === 'capture-page';
+}
+function isRestrictedPageError(message: string): boolean {
+  return /Cannot access|chrome:\/\/|extensions gallery/i.test(message);
+}
+
 const CONTENT_SCRIPT = 'content.js';
 const CAPTURE_INTERVAL_MS = 550;
 const MAX_CANVAS_DIMENSION = 32_767;
@@ -18,7 +29,8 @@ void deleteExpiredCaptures().catch(() => undefined);
 chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
   if (!isExtensionMessage(raw)) return false;
   void handleMessage(raw, sender).then(sendResponse).catch((error: unknown) => {
-    sendResponse({ ok: false, error: getErrorMessage(error) } satisfies ExtensionResponse);
+    const code = error instanceof FileAccessRequiredError ? error.code : undefined;
+    sendResponse({ ok: false, error: getErrorMessage(error), code } satisfies ExtensionResponse);
   });
   return true;
 });
@@ -47,7 +59,7 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       if (message.tabId === undefined) return { ok: true, tool: 'idle' };
       const cachedTool = tabStates.get(message.tabId);
       const contentState = await queryContentState(message.tabId);
-      const tool = cachedTool === 'capture-element' || cachedTool === 'capture-page' ? cachedTool : contentState.tool;
+      const tool = isCapturingTool(cachedTool) ? cachedTool : contentState.tool;
       tabStates.set(message.tabId, tool);
       return { ok: true, tool, captureProgress: captureProgressStates.get(message.tabId) ?? contentState.captureProgress };
     }
@@ -71,9 +83,16 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
     }
     case 'CAPTURE_DOCUMENT': {
       if (sender.tab?.id === undefined) return { ok: false, error: '캡처할 탭을 확인할 수 없습니다.' };
-      const captureId = await captureDocument(sender.tab.id, sender.tab.windowId, message.rect, message.viewport, message.screenshotViewport, message.title, message.preferredPosition);
+      const captureId = await captureDocument(sender.tab.id, sender.tab.windowId, message.rect, message.viewport, message.screenshotViewport, message.viewportOffset, message.title, message.preferredPosition);
       return { ok: true, captureId };
     }
+    case 'CAPTURE_REGION': {
+      if (sender.tab?.windowId === undefined) return { ok: false, error: '캡처할 탭을 확인할 수 없습니다.' };
+      const captureId = await captureRegion(sender.tab.windowId, message.rect, message.screenshotViewport, message.title);
+      return { ok: true, captureId };
+    }
+    case 'DESIGN_OVERLAY_UPDATE':
+      return chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(message.tabId, message);
     case 'CAPTURE_CANCEL':
       if (sender.tab?.id !== undefined) captureAbortControllers.get(sender.tab.id)?.abort();
       return { ok: true };
@@ -89,7 +108,7 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
   }
 }
 
-async function captureDocument(tabId: number, windowId: number, rect: CaptureRect, viewport: CaptureViewportSize, screenshotViewport: CaptureViewportSize, title: string, preferredPosition?: CaptureScrollPosition): Promise<string> {
+async function captureDocument(tabId: number, windowId: number, rect: CaptureRect, viewport: CaptureViewportSize, screenshotViewport: CaptureViewportSize, viewportOffset: CaptureScrollPosition, title: string, preferredPosition?: CaptureScrollPosition): Promise<string> {
   captureAbortControllers.get(tabId)?.abort();
   const abortController = new AbortController();
   captureAbortControllers.set(tabId, abortController);
@@ -101,17 +120,19 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
   let context: OffscreenCanvasRenderingContext2D | null = null;
   let scaleX = 1;
   let scaleY = 1;
+  const firstPageRowY = tiles[0]?.position.y ?? 0;
   try {
     for (const [index, tile] of tiles.entries()) {
       throwIfAborted(abortController.signal);
+      const suppressViewportFixed = shouldSuppressViewportFixed(preferredPosition, tile.position, firstPageRowY);
       let scrollResponse = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, {
         type: 'CAPTURE_SCROLL_TO',
         position: tile.position,
-        suppressViewportFixed: shouldSuppressViewportFixed(preferredPosition, index),
+        suppressViewportFixed,
       });
       if (!scrollResponse.ok || scrollResponse.position === undefined) throw new Error(scrollResponse.ok ? '페이지 스크롤 위치를 확인할 수 없습니다.' : scrollResponse.error);
       if (index > 0) await delay(CAPTURE_INTERVAL_MS, abortController.signal);
-      if (shouldSuppressViewportFixed(preferredPosition, index)) {
+      if (suppressViewportFixed) {
         scrollResponse = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, {
           type: 'CAPTURE_SCROLL_TO',
           position: scrollResponse.position,
@@ -134,7 +155,7 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
           if (context === null) throw new Error('캡처 이미지를 합성할 수 없습니다.');
         }
         if (context === null) throw new Error('캡처 이미지를 합성할 수 없습니다.');
-        drawTile(context, bitmap, rect, viewport, scrollResponse.position, scaleX, scaleY);
+        drawTile(context, bitmap, rect, viewport, scrollResponse.position, viewportOffset, scaleX, scaleY);
       } finally { bitmap.close(); }
       void chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_PROGRESS', completed: index + 1, total: tiles.length } satisfies ExtensionMessage).catch(() => undefined);
       captureProgressStates.set(tabId, { phase: 'capturing', completed: index + 1, total: tiles.length });
@@ -144,8 +165,7 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
     const blob = await canvas.convertToBlob({ type: 'image/png' });
     const captureId = crypto.randomUUID();
     await saveCapture({ id: captureId, blob, width: canvas.width, height: canvas.height, title: sanitizeTitle(title), createdAt: Date.now() });
-    const viewerTab = await chrome.tabs.create({ url: chrome.runtime.getURL(`src/viewer/viewer.html?id=${encodeURIComponent(captureId)}`) });
-    if (viewerTab.id !== undefined) viewerCaptures.set(viewerTab.id, captureId);
+    await openViewerTab(captureId);
     return captureId;
   } finally {
     captureProgressStates.delete(tabId);
@@ -153,16 +173,49 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
   }
 }
 
+/**
+ * A single-shot alternative to captureDocument for the region-select tool: no tiling, no
+ * scroll-and-settle wait, no animation pausing — just crop whatever is on screen right now, so
+ * the result matches exactly what the user saw when they released the drag.
+ */
+async function captureRegion(windowId: number, rect: CaptureRect, screenshotViewport: CaptureViewportSize, title: string): Promise<string> {
+  const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+  const bitmap = await dataUrlToBitmap(dataUrl);
+  try {
+    const scaleX = bitmap.width / screenshotViewport.width;
+    const scaleY = bitmap.height / screenshotViewport.height;
+    const outputWidth = Math.round(rect.width * scaleX);
+    const outputHeight = Math.round(rect.height * scaleY);
+    assertCanvasSize(outputWidth, outputHeight);
+    const canvas = new OffscreenCanvas(outputWidth, outputHeight);
+    const context = canvas.getContext('2d');
+    if (context === null) throw new Error('캡처 이미지를 합성할 수 없습니다.');
+    context.drawImage(bitmap, rect.left * scaleX, rect.top * scaleY, outputWidth, outputHeight, 0, 0, outputWidth, outputHeight);
+    const blob = await canvas.convertToBlob({ type: 'image/png' });
+    const captureId = crypto.randomUUID();
+    await saveCapture({ id: captureId, blob, width: canvas.width, height: canvas.height, title: sanitizeTitle(title), createdAt: Date.now() });
+    await openViewerTab(captureId);
+    return captureId;
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function openViewerTab(captureId: string): Promise<void> {
+  const viewerTab = await chrome.tabs.create({ url: chrome.runtime.getURL(`src/viewer/viewer.html?id=${encodeURIComponent(captureId)}`) });
+  if (viewerTab.id !== undefined) viewerCaptures.set(viewerTab.id, captureId);
+}
+
 async function assertCaptureTabActive(tabId: number, windowId: number): Promise<void> {
   const tab = await chrome.tabs.get(tabId);
   if (!tab.active || tab.windowId !== windowId) throw new Error('캡처 중에는 원본 탭을 다른 탭으로 전환하지 마세요.');
 }
 
-function drawTile(context: OffscreenCanvasRenderingContext2D, bitmap: ImageBitmap, target: CaptureRect, viewport: CaptureViewportSize, position: CaptureScrollPosition, scaleX: number, scaleY: number): void {
+function drawTile(context: OffscreenCanvasRenderingContext2D, bitmap: ImageBitmap, target: CaptureRect, viewport: CaptureViewportSize, position: CaptureScrollPosition, viewportOffset: CaptureScrollPosition, scaleX: number, scaleY: number): void {
   const intersection = intersectCaptureRect(target, position, viewport);
   if (intersection === null) return;
-  const sourceX = (intersection.left - position.x) * scaleX;
-  const sourceY = (intersection.top - position.y) * scaleY;
+  const sourceX = (intersection.left - position.x + viewportOffset.x) * scaleX;
+  const sourceY = (intersection.top - position.y + viewportOffset.y) * scaleY;
   const sourceWidth = intersection.width * scaleX;
   const sourceHeight = intersection.height * scaleY;
   const destinationX = (intersection.left - target.left) * scaleX;
@@ -206,7 +259,14 @@ function sanitizeTitle(title: string): string {
 }
 async function ensureContentScript(tabId: number): Promise<void> {
   try { await chrome.tabs.sendMessage(tabId, { type: 'GET_TOOL_STATE' } satisfies ExtensionMessage); }
-  catch { await chrome.scripting.executeScript({ target: { tabId }, files: [CONTENT_SCRIPT] }); }
+  catch {
+    try { await chrome.scripting.executeScript({ target: { tabId }, files: [CONTENT_SCRIPT] }); }
+    catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isRestrictedPageError(message)) throw new FileAccessRequiredError();
+      throw error;
+    }
+  }
 }
 async function sendToolCommand(tabId: number, tool: ToolMode): Promise<void> {
   await chrome.tabs.sendMessage(tabId, { type: 'TOOL_COMMAND', tool } satisfies ExtensionMessage);
@@ -219,10 +279,10 @@ async function queryContentState(tabId: number): Promise<{ tool: ToolMode; captu
 }
 function getErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return /Cannot access|chrome:\/\/|extensions gallery/i.test(message) ? '이 페이지에서는 PixelScope를 실행할 수 없습니다.' : message;
+  return isRestrictedPageError(message) ? '이 페이지에서는 PixelScope를 실행할 수 없습니다.' : message;
 }
 async function setCaptureBadge(tabId: number, tool: ToolMode): Promise<void> {
-  const capturing = tool === 'capture-element' || tool === 'capture-page';
+  const capturing = isCapturingTool(tool);
   if (capturing) await chrome.action.setBadgeBackgroundColor({ tabId, color: '#dc2626' });
   await chrome.action.setBadgeText({ tabId, text: capturing ? 'REC' : '' });
 }

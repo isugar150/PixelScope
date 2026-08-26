@@ -4,8 +4,12 @@ export interface CaptureTile {
   readonly position: CaptureScrollPosition;
 }
 
-export function shouldSuppressViewportFixed(preferredPosition: CaptureScrollPosition | undefined, tileIndex: number): boolean {
-  return preferredPosition === undefined ? tileIndex > 0 : true;
+export function shouldSuppressViewportFixed(
+  preferredPosition: CaptureScrollPosition | undefined,
+  tilePosition: CaptureScrollPosition,
+  firstPageRowY: number,
+): boolean {
+  return preferredPosition !== undefined || Math.abs(tilePosition.y - firstPageRowY) > 1;
 }
 
 export function createCaptureTiles(rect: CaptureRect, viewport: CaptureViewportSize, preferredPosition?: CaptureScrollPosition): CaptureTile[] {

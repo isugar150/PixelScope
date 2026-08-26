@@ -1,4 +1,5 @@
 import type { Point } from '../coordinate';
+import { isAreaDrag } from '../measure-utils';
 import { colorPickerInteractionStyles } from '../styles';
 import type { ToolLifecycle } from '../tool-controller';
 import type { RgbColor } from './color-converter';
@@ -17,6 +18,7 @@ export class ColorPickerController implements ToolLifecycle {
   #frame: number | null = null;
   #lastPoint: Point | null = null;
   #lastColor: RgbColor | null = null;
+  #touchPending: { readonly pointerId: number; readonly start: Point } | null = null;
 
   public constructor(onExit: () => void) { this.#onExit = onExit; }
   public get active(): boolean { return this.#active; }
@@ -58,12 +60,37 @@ export class ColorPickerController implements ToolLifecycle {
     this.#locked = false;
     this.#lastPoint = null;
     this.#lastColor = null;
+    this.#touchPending = null;
   }
 
-  readonly #onPointerMove = (event: PointerEvent): void => {
-    if (this.#locked || !event.isPrimary || (event.pointerType !== 'mouse' && event.pointerType !== 'touch' && event.pointerType !== 'pen')) return;
-    this.#lastPoint = { x: event.clientX, y: event.clientY };
+  readonly #onPointerDown = (event: PointerEvent): void => {
+    if (this.#locked || !event.isPrimary || !isSupportedPointer(event.pointerType)) return;
+    const point = { x: event.clientX, y: event.clientY };
+    this.#lastPoint = point;
+    if (event.pointerType === 'touch') this.#touchPending = { pointerId: event.pointerId, start: point };
     if (this.#frame === null) this.#frame = window.requestAnimationFrame(this.#render);
+  };
+  readonly #onPointerMove = (event: PointerEvent): void => {
+    if (this.#locked || !event.isPrimary || !isSupportedPointer(event.pointerType)) return;
+    const point = { x: event.clientX, y: event.clientY };
+    if (event.pointerType === 'touch') {
+      if (this.#touchPending?.pointerId === event.pointerId && isAreaDrag(this.#touchPending.start, point)) this.#touchPending = null;
+      return;
+    }
+    this.#lastPoint = point;
+    if (this.#frame === null) this.#frame = window.requestAnimationFrame(this.#render);
+  };
+
+  readonly #onPointerUp = (event: PointerEvent): void => {
+    if (event.pointerType !== 'touch' || this.#locked || !event.isPrimary) return;
+    const pending = this.#touchPending;
+    this.#touchPending = null;
+    if (pending === null || pending.pointerId !== event.pointerId) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    this.#selectAt({ x: event.clientX, y: event.clientY });
+  };
+  readonly #onPointerCancel = (event: PointerEvent): void => {
+    if (this.#touchPending?.pointerId === event.pointerId) this.#touchPending = null;
   };
 
   readonly #render = (): void => {
@@ -81,14 +108,17 @@ export class ColorPickerController implements ToolLifecycle {
     event.preventDefault();
     event.stopImmediatePropagation();
     if (this.#locked) return;
-    const point = { x: event.clientX, y: event.clientY };
+    this.#selectAt({ x: event.clientX, y: event.clientY });
+  };
+
+  #selectAt(point: Point): void {
     const color = this.#sample(point) ?? this.#lastColor;
     if (color === null) return;
     this.#lastPoint = point;
     this.#lastColor = color;
     if (this.#sampler !== null) this.#overlay?.update(color, point, this.#sampler);
     this.#lockSelection();
-  };
+  }
 
   readonly #onContextMenu = (event: MouseEvent): void => { if (!this.#locked) event.stopImmediatePropagation(); };
   readonly #onKeyDown = (event: KeyboardEvent): void => {
@@ -124,8 +154,10 @@ export class ColorPickerController implements ToolLifecycle {
   }
 
   #addListeners(): void {
-    window.addEventListener('pointerdown', this.#onPointerMove, { capture: true, passive: true });
+    window.addEventListener('pointerdown', this.#onPointerDown, { capture: true, passive: true });
     window.addEventListener('pointermove', this.#onPointerMove, { capture: true, passive: true });
+    window.addEventListener('pointerup', this.#onPointerUp, { capture: true, passive: false });
+    window.addEventListener('pointercancel', this.#onPointerCancel, { capture: true });
     window.addEventListener('click', this.#onClick, { capture: true, passive: false });
     window.addEventListener('contextmenu', this.#onContextMenu, { capture: true });
     window.addEventListener('keydown', this.#onKeyDown, { capture: true, passive: false });
@@ -134,12 +166,18 @@ export class ColorPickerController implements ToolLifecycle {
   }
 
   #removeListeners(): void {
-    window.removeEventListener('pointerdown', this.#onPointerMove, true);
+    window.removeEventListener('pointerdown', this.#onPointerDown, true);
     window.removeEventListener('pointermove', this.#onPointerMove, true);
+    window.removeEventListener('pointerup', this.#onPointerUp, true);
+    window.removeEventListener('pointercancel', this.#onPointerCancel, true);
     window.removeEventListener('click', this.#onClick, true);
     window.removeEventListener('contextmenu', this.#onContextMenu, true);
     window.removeEventListener('keydown', this.#onKeyDown, true);
     window.removeEventListener('scroll', this.#onViewportChange, true);
     window.removeEventListener('resize', this.#onViewportChange);
   }
+}
+
+function isSupportedPointer(pointerType: string): boolean {
+  return pointerType === 'mouse' || pointerType === 'touch' || pointerType === 'pen';
 }

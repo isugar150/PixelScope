@@ -1,12 +1,13 @@
 import './viewer.css';
 import { deleteExpiredCaptures, getCapture } from '../capture/capture-store';
 import type { StoredCapture } from '../shared/capture';
-import { adjustCropRect, createInitialCropRect, imagePointFromViewport, isCropRectWithinBounds } from './crop';
+import { adjustCropRect, createInitialCropRect, imagePointFromViewport, isCropRectWithinBounds, visibleImageCenter } from './crop';
 import type { CropHandle, CropInteraction, CropPoint, CropRect } from './crop';
 
 const captureId = new URLSearchParams(location.search).get('id');
 const title = requiredElement('title', HTMLHeadingElement);
 const meta = requiredElement('meta', HTMLParagraphElement);
+const header = requiredElement('viewer-header', HTMLElement);
 const stage = requiredElement('stage', HTMLElement);
 const empty = requiredElement('empty', HTMLDivElement);
 const imageShell = requiredElement('image-shell', HTMLDivElement);
@@ -43,6 +44,7 @@ let zoom = 1;
 let cropRect: CropRect | null = null;
 let cropDrag: { readonly pointerId: number; readonly start: CropPoint; readonly previous: CropRect; readonly interaction: CropInteraction } | null = null;
 let cropMode = false;
+let cropStartFrame: number | null = null;
 let edited = false;
 let toastTimer: number | null = null;
 
@@ -79,6 +81,7 @@ cropLayer.addEventListener('pointercancel', cancelCropDrag);
 for (const input of Object.values(cropInputs)) input.addEventListener('input', updateCropFromInputs);
 window.addEventListener('keydown', handleKeydown);
 window.addEventListener('pagehide', () => {
+  if (cropStartFrame !== null) cancelAnimationFrame(cropStartFrame);
   if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
 });
 
@@ -125,12 +128,41 @@ function startCrop(): void {
   copyButton.disabled = true;
   downloadButton.disabled = true;
   resetCropButton.disabled = true;
-  setCropRect(createInitialCropRect(imageBounds()), true);
+  cropSelection.hidden = true;
   cropLayer.focus({ preventScroll: true });
+  cropStartFrame = requestAnimationFrame(() => {
+    if (!cropMode) return;
+    setCropRect(createInitialCropRect(imageBounds(), 100, currentVisibleImageCenter()), true);
+    cropSelection.hidden = true;
+    cropStartFrame = requestAnimationFrame(() => {
+      cropStartFrame = null;
+      if (!cropMode) return;
+      setCropRect(createInitialCropRect(imageBounds(), 100, currentVisibleImageCenter()), true);
+    });
+  });
+}
+
+function currentVisibleImageCenter(): CropPoint {
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = window.innerHeight;
+  return visibleImageCenter(
+    image.getBoundingClientRect(),
+    {
+      left: 0,
+      top: Math.max(0, header.getBoundingClientRect().bottom),
+      right: viewportWidth,
+      bottom: viewportHeight,
+    },
+    imageBounds(),
+  );
 }
 
 function cancelCrop(restoreFocus: boolean): void {
   if (!cropMode) return;
+  if (cropStartFrame !== null) {
+    cancelAnimationFrame(cropStartFrame);
+    cropStartFrame = null;
+  }
   if (cropDrag !== null && cropLayer.hasPointerCapture(cropDrag.pointerId)) cropLayer.releasePointerCapture(cropDrag.pointerId);
   cropMode = false;
   cropDrag = null;
