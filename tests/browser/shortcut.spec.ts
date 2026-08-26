@@ -28,6 +28,11 @@ test('Alt+Backquote toggles page interaction unlock on its first visit without o
 
     await expect(page.locator('[data-pixelscope-interaction-unlock-toast]')).toHaveCount(1);
     await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => element.shadowRoot?.textContent ?? '')).toContain('우클릭·드래그 해제 켜짐');
+    await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => element.shadowRoot?.querySelector('.toast')?.getAttribute('data-state'))).toBe('enabled');
+    await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => {
+      const shackle = element.shadowRoot?.querySelector('.lock-shackle');
+      return shackle === undefined || shackle === null ? '' : getComputedStyle(shackle).animationName;
+    })).toBe('pixelscope-unlock-shackle');
     await expect.poll(() => page.evaluate(() => ['contextmenu', 'dragstart', 'selectstart'].every((type) => (
       document.body.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }))
     )))).toBe(true);
@@ -37,6 +42,11 @@ test('Alt+Backquote toggles page interaction unlock on its first visit without o
 
     await expect(page.locator('html')).not.toHaveAttribute('data-pixelscope-interactions-unlocked', '');
     await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => element.shadowRoot?.textContent ?? '')).toContain('우클릭·드래그 해제 꺼짐');
+    await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => element.shadowRoot?.querySelector('.toast')?.getAttribute('data-state'))).toBe('disabled');
+    await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => {
+      const shackle = element.shadowRoot?.querySelector('.lock-shackle');
+      return shackle === undefined || shackle === null ? '' : getComputedStyle(shackle).animationName;
+    })).toBe('pixelscope-lock-shackle');
     await expect.poll(() => page.evaluate(() => ['contextmenu', 'dragstart', 'selectstart'].every((type) => (
       !document.body.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }))
     )))).toBe(true);

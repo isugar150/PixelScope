@@ -23,9 +23,15 @@ describe('page interaction unlocker', () => {
     expect(document.querySelector('[data-pixelscope-interaction-unlock-style]')?.textContent).toContain('user-select: text !important');
     const toast = document.querySelector('[data-pixelscope-interaction-unlock-toast]');
     expect(toast?.shadowRoot?.textContent).toContain('우클릭·드래그 해제 켜짐');
-    expect(toast?.shadowRoot?.querySelector('[role="status"]')).not.toBeNull();
+    expect(toast?.shadowRoot?.querySelector('[role="status"]')?.classList.contains('enabled')).toBe(true);
+    expect(toast?.shadowRoot?.querySelector('[role="status"]')?.getAttribute('data-state')).toBe('enabled');
+    expect(toast?.shadowRoot?.querySelector('.lock-shackle')?.getAttribute('d')).toBe('M5 10V7a4.5 4.5 0 0 1 9 0v3');
+    expect(toast?.shadowRoot?.querySelector('style')?.textContent).toContain('42% { transform: translateY(-2px) rotateY(0); }');
+    expect(toast?.shadowRoot?.querySelector('style')?.textContent).toContain('100% { transform: translateY(-2px) rotateY(180deg); }');
 
-    vi.advanceTimersByTime(3_000);
+    vi.advanceTimersByTime(999);
+    expect(document.querySelector('[data-pixelscope-interaction-unlock-toast]')).not.toBeNull();
+    vi.advanceTimersByTime(1);
     expect(document.querySelector('[data-pixelscope-interaction-unlock-toast]')).toBeNull();
     expect(document.documentElement.hasAttribute('data-pixelscope-interactions-unlocked')).toBe(true);
   });
@@ -38,7 +44,10 @@ describe('page interaction unlocker', () => {
     expect(unlocker.active).toBe(false);
     expect(document.documentElement.hasAttribute('data-pixelscope-interactions-unlocked')).toBe(false);
     expect(document.querySelector('[data-pixelscope-interaction-unlock-style]')).toBeNull();
-    expect(document.querySelector('[data-pixelscope-interaction-unlock-toast]')?.shadowRoot?.textContent).toContain('우클릭·드래그 해제 꺼짐');
+    const toast = document.querySelector('[data-pixelscope-interaction-unlock-toast]');
+    expect(toast?.shadowRoot?.textContent).toContain('우클릭·드래그 해제 꺼짐');
+    expect(toast?.shadowRoot?.querySelector('[role="status"]')?.classList.contains('disabled')).toBe(true);
+    expect(toast?.shadowRoot?.querySelector('[role="status"]')?.getAttribute('data-state')).toBe('disabled');
   });
 
   it('cleans up the shortcut, style, state, and toast on dispose', () => {

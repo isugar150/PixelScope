@@ -40,6 +40,7 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.getByRole('button', { name: 'CSS 변경 추출', exact: true })).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByRole('button', { name: '우클릭·드래그 해제', exact: true })).toHaveAttribute('aria-keyshortcuts', 'Alt+`');
     await expect(page.getByRole('button', { name: '우클릭·드래그 해제', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#unlock-interactions .lock-shackle')).toHaveCSS('transform', 'none');
     await expect(page.locator('#status')).toHaveCount(0);
     await expect(page.locator('.summary-copy small, .capture-actions small')).toHaveCount(0);
     const measureMore = page.locator('button[aria-controls="measure-options"]');
@@ -98,6 +99,29 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.locator('[data-tool-card="capture"]')).toBeHidden();
     await page.keyboard.press('Tab');
     await expect(page.locator(':focus')).toBeVisible();
+  } finally { await context.close(); }
+});
+
+test('interaction unlock button animates between closed and open lock states', async () => {
+  const extensionPath = resolve(import.meta.dirname, '../../dist');
+  const context = await chromium.launchPersistentContext('', {
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    let worker = context.serviceWorkers()[0];
+    worker ??= await context.waitForEvent('serviceworker');
+    const extensionId = new URL(worker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/src/popup/popup.html`);
+    const button = page.locator('#unlock-interactions');
+    const shackle = button.locator('.lock-shackle');
+
+    await expect(shackle).toHaveCSS('transform', 'none');
+    await button.evaluate((element) => element.setAttribute('aria-pressed', 'true'));
+    await expect(shackle).not.toHaveCSS('transform', 'none');
+    await button.evaluate((element) => element.setAttribute('aria-pressed', 'false'));
+    await expect(shackle).toHaveCSS('transform', 'none');
   } finally { await context.close(); }
 });
 
@@ -165,7 +189,14 @@ test('Alt+Backquote unlock shortcut shows a temporary page status toast', async 
     await expect(page.locator('html')).toHaveAttribute('data-pixelscope-interactions-unlocked', '');
     await expect(page.locator('[data-pixelscope-interaction-unlock-toast]')).toHaveCount(1);
     await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => element.shadowRoot?.textContent ?? '')).toContain('우클릭·드래그 해제 켜짐');
-    await expect(page.locator('[data-pixelscope-interaction-unlock-toast]')).toHaveCount(0, { timeout: 4_000 });
+    await expect.poll(() => page.locator('[data-pixelscope-interaction-unlock-toast]').evaluate((element) => {
+      const toast = element.shadowRoot?.querySelector('.toast');
+      if (toast === undefined || toast === null) return false;
+      const rect = toast.getBoundingClientRect();
+      return Math.abs(rect.left + rect.width / 2 - window.innerWidth / 2) < 1
+        && Math.abs(rect.top + rect.height / 2 - window.innerHeight / 2) < 1;
+    })).toBe(true);
+    await expect(page.locator('[data-pixelscope-interaction-unlock-toast]')).toHaveCount(0, { timeout: 2_000 });
     await expect(page.locator('html')).toHaveAttribute('data-pixelscope-interactions-unlocked', '');
 
     await page.keyboard.press('Alt+Backquote');

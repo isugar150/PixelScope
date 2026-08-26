@@ -186,6 +186,29 @@ h1 {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.lock-shackle {
+  transform-box: view-box;
+  transform-origin: 7px 11px;
+  backface-visibility: visible;
+}
+.lock-icon {
+  overflow: visible;
+  perspective: 48px;
+}
+#unlock-interactions[aria-pressed="true"] .lock-shackle {
+  animation: pixelscope-popup-unlock-shackle 420ms var(--ease-spring) both;
+}
+@keyframes pixelscope-popup-unlock-shackle {
+  0% { transform: translateY(0) rotateY(0); }
+  42% { transform: translateY(-2.5px) rotateY(0); }
+  100% { transform: translateY(-2.5px) rotateY(180deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #unlock-interactions[aria-pressed="true"] .lock-shackle {
+    animation: none;
+    transform: translateY(-2.5px) rotateY(180deg);
+  }
+}
 
 .capture-card { border-bottom: 0; }
 .capture-card.open { background: var(--panel); }

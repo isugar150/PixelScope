@@ -2,7 +2,7 @@ const UNLOCKED_ATTRIBUTE = 'data-pixelscope-interactions-unlocked';
 const TOOL_ACTIVE_ATTRIBUTE = 'data-pixelscope-tool-active';
 const STYLE_ATTRIBUTE = 'data-pixelscope-interaction-unlock-style';
 const TOAST_ATTRIBUTE = 'data-pixelscope-interaction-unlock-toast';
-const TOAST_DURATION_MS = 3_000;
+const TOAST_DURATION_MS = 1_000;
 
 export class PageInteractionUnlocker {
   #style: HTMLStyleElement | null = null;
@@ -65,40 +65,59 @@ export class PageInteractionUnlocker {
         all: initial !important;
         position: fixed !important;
         left: 50% !important;
-        bottom: 24px !important;
+        top: 50% !important;
         z-index: 2147483647 !important;
         pointer-events: none !important;
-        transform: translateX(-50%) !important;
+        transform: translate(-50%, -50%) !important;
       }
       .toast {
         display: flex;
         align-items: center;
-        gap: 9px;
+        gap: 12px;
         max-width: calc(100vw - 32px);
-        padding: 11px 14px;
-        border: 1px solid rgba(167, 243, 208, 0.42);
-        border-radius: 8px;
-        background: rgba(8, 17, 29, 0.96);
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
+        padding: 15px 20px;
+        border: 1px solid rgba(167, 243, 208, 0.56);
+        border-radius: 12px;
+        background: rgba(8, 17, 29, 0.97);
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.48);
         color: #ecfdf5;
-        font: 600 13px/1.35 "Segoe UI", Arial, sans-serif;
+        font: 650 15px/1.35 "Segoe UI", Arial, sans-serif;
         white-space: nowrap;
       }
-      svg { width: 17px; height: 17px; flex: none; fill: none; stroke: #6ee7b7; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+      svg { width: 22px; height: 22px; flex: none; overflow: visible; perspective: 40px; fill: none; stroke: #6ee7b7; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+      .lock-shackle { transform-box: view-box; transform-origin: 5px 10px; backface-visibility: visible; }
       @media (prefers-reduced-motion: no-preference) {
         .toast { animation: pixelscope-toast-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+        .toast.enabled .lock-shackle { animation: pixelscope-unlock-shackle 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+        .toast.disabled .lock-shackle { animation: pixelscope-lock-shackle 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
         @keyframes pixelscope-toast-in { from { opacity: 0; transform: translateY(6px); } }
+        @keyframes pixelscope-unlock-shackle {
+          0% { transform: translateY(0) rotateY(0); }
+          42% { transform: translateY(-2px) rotateY(0); }
+          100% { transform: translateY(-2px) rotateY(180deg); }
+        }
+        @keyframes pixelscope-lock-shackle {
+          0% { transform: translateY(-2px) rotateY(180deg); }
+          58% { transform: translateY(-2px) rotateY(0); }
+          100% { transform: translateY(0) rotateY(0); }
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .toast.enabled .lock-shackle { transform: translateY(-2px) rotateY(180deg); }
+        .toast.disabled .lock-shackle { transform: translateY(0) rotateY(0); }
       }
     `;
     const toast = document.createElement('div');
-    toast.className = 'toast';
+    toast.className = `toast ${enabled ? 'enabled' : 'disabled'}`;
+    toast.dataset.state = enabled ? 'enabled' : 'disabled';
     toast.setAttribute('role', 'status');
     toast.setAttribute('aria-live', 'polite');
     const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     icon.setAttribute('aria-hidden', 'true');
     icon.setAttribute('viewBox', '0 0 20 20');
-    for (const pathData of ['M5 9V6a5 5 0 0 1 9.7-1.7M4 9h12v8H4z', 'm8 13 1.5 1.5L12.5 11']) {
+    for (const [className, pathData] of [['lock-shackle', 'M5 10V7a4.5 4.5 0 0 1 9 0v3'], ['', 'M4 10h12v8H4zM10 13v2']] as const) {
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      if (className !== '') path.setAttribute('class', className);
       path.setAttribute('d', pathData);
       icon.append(path);
     }
