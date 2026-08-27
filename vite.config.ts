@@ -9,6 +9,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    modulePreload: { polyfill: false },
     sourcemap: false,
     target: 'chrome109',
     rollupOptions: {

@@ -1,8 +1,11 @@
 import { chromium, expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 test('privacy policy is bundled as a public standalone page', async () => {
   const extensionPath = resolve(import.meta.dirname, '../../dist');
+  const devtoolsBundle = await readFile(resolve(extensionPath, 'devtools.js'), 'utf8');
+  expect(devtoolsBundle).not.toMatch(/\bimport\s*(?:\(|["'{])/);
   const context = await chromium.launchPersistentContext('', {
     headless: false,
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],

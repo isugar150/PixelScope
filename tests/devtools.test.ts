@@ -33,4 +33,46 @@ describe('DevTools CSS baseline capture', () => {
     expect(getResources).toHaveBeenCalledOnce();
     expect(set).toHaveBeenCalledOnce();
   });
+
+  it('does not reject module initialization when listener registration sees a stale context', async () => {
+    const contextError = new Error('Extension context invalidated.');
+    const addListener = vi.fn(() => { throw contextError; });
+    const removeListener = vi.fn();
+    const getHAR = vi.fn();
+    Reflect.set(globalThis, 'chrome', {
+      runtime: { id: undefined },
+      devtools: {
+        inspectedWindow: { tabId: 7, getResources: vi.fn() },
+        network: { getHAR, onNavigated: { addListener, removeListener } },
+      },
+      storage: { session: { set: vi.fn() } },
+    });
+
+    await expect(import('../src/devtools/devtools')).resolves.toBeDefined();
+
+    expect(addListener).toHaveBeenCalledOnce();
+    expect(removeListener).toHaveBeenCalledOnce();
+    expect(getHAR).not.toHaveBeenCalled();
+  });
+
+  it('handles the Promise rejection returned by a callback-style DevTools API', async () => {
+    const addListener = vi.fn();
+    const removeListener = vi.fn();
+    const getHAR = vi.fn(() => Promise.reject(new Error('Extension context invalidated.')));
+    const getResources = vi.fn();
+    Reflect.set(globalThis, 'chrome', {
+      runtime: { id: 'pixelscope-test' },
+      devtools: {
+        inspectedWindow: { tabId: 7, getResources },
+        network: { getHAR, onNavigated: { addListener, removeListener } },
+      },
+      storage: { session: { set: vi.fn() } },
+    });
+
+    await import('../src/devtools/devtools');
+    await vi.waitFor(() => expect(removeListener).toHaveBeenCalledOnce());
+
+    expect(getHAR).toHaveBeenCalledOnce();
+    expect(getResources).not.toHaveBeenCalled();
+  });
 });
