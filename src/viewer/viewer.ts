@@ -1,5 +1,5 @@
 import './viewer.css';
-import { deleteExpiredCaptures, getCapture } from '../capture/capture-store';
+import { deleteCapture, deleteExpiredCaptures, getCapture } from '../capture/capture-store';
 import type { StoredCapture } from '../shared/capture';
 import { adjustCropRect, createInitialCropRect, imagePointFromViewport, isCropRectWithinBounds, visibleImageCenter } from './crop';
 import type { CropHandle, CropInteraction, CropPoint, CropRect } from './crop';
@@ -83,6 +83,7 @@ window.addEventListener('keydown', handleKeydown);
 window.addEventListener('pagehide', () => {
   if (cropStartFrame !== null) cancelAnimationFrame(cropStartFrame);
   if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
+  if (captureId !== null) void deleteCapture(captureId).catch(() => undefined);
 });
 
 async function setCurrentImage(blob: Blob, width: number, height: number): Promise<void> {

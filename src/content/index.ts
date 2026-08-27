@@ -148,11 +148,13 @@ function isContentMessage(value: unknown): value is
   return value.type === 'DESIGN_OVERLAY_UPDATE' && 'opacity' in value && typeof value.opacity === 'number'
     && 'scale' in value && typeof value.scale === 'string' && ['fit', '0.5', '1', '1.5', '2', '3'].includes(value.scale)
     && 'blendMode' in value && (value.blendMode === 'normal' || value.blendMode === 'difference')
-    && (!('imageDataUrl' in value) || typeof value.imageDataUrl === 'string');
+      && (!('imageDataUrl' in value) || typeof value.imageDataUrl === 'string');
 }
 
+// Keep this runtime guard local so the injected content bundle remains a standalone IIFE.
 function isToolMode(value: unknown): value is ToolMode {
-  return value === 'idle' || value === 'measure' || value === 'color-picker' || value === 'capture-element' || value === 'capture-page' || value === 'design-overlay' || value === 'css-changes';
+  return value === 'idle' || value === 'measure' || value === 'color-picker' || value === 'capture-element'
+    || value === 'capture-page' || value === 'design-overlay' || value === 'css-changes';
 }
 
 function removeStaleArtifacts(): void {

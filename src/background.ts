@@ -3,8 +3,8 @@ import { createCaptureTiles, intersectCaptureRect, shouldSuppressViewportFixed }
 import { isExtensionMessage, type ExtensionMessage, type ExtensionResponse } from './shared/messages';
 import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './shared/capture';
 import type { ToolMode } from './shared/tool-state';
-import { cssBaselineStorageKey, isDevtoolsCssBaseline } from './shared/css-baseline';
 import { installPageInteractionUnlock } from './page-interaction-unlock-main';
+import { loadCssResourceBaseline } from './css-baseline-loader';
 
 class FileAccessRequiredError extends Error {
   readonly code = 'file-access-required' as const;
@@ -42,7 +42,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   captureAbortControllers.get(tabId)?.abort();
   captureAbortControllers.delete(tabId);
   captureProgressStates.delete(tabId);
-  void chrome.storage.session.remove(cssBaselineStorageKey(tabId));
   const captureId = viewerCaptures.get(tabId);
   if (captureId !== undefined) {
     viewerCaptures.delete(tabId);
@@ -59,11 +58,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.MessageSender): Promise<ExtensionResponse> {
   switch (message.type) {
     case 'GET_CSS_BASELINE': {
-      if (sender.tab?.id === undefined) return { ok: true };
-      const key = cssBaselineStorageKey(sender.tab.id);
-      const stored = await chrome.storage.session.get(key);
-      const baseline: unknown = stored[key];
-      return isDevtoolsCssBaseline(baseline) ? { ok: true, cssBaseline: baseline } : { ok: true };
+      const resources = await loadCssResourceBaseline(message.styleSheetUrls);
+      return {
+        ok: true,
+        cssBaseline: {
+          pageUrl: sender.tab?.url ?? sender.url ?? '',
+          capturedAt: Date.now(),
+          resources,
+        },
+      };
     }
     case 'GET_TOOL_STATE': {
       if (message.tabId === undefined) return { ok: true, tool: 'idle' };
@@ -82,17 +85,21 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
     }
     case 'ACTIVATE_TOOL':
       await ensureContentScript(message.tabId);
-      await sendToolCommand(message.tabId, message.tool);
-      tabStates.set(message.tabId, message.tool);
-      void setCaptureBadge(message.tabId, message.tool).catch(() => undefined);
-      return { ok: true, tool: message.tool };
+      {
+        const tool = await sendToolCommand(message.tabId, message.tool);
+        tabStates.set(message.tabId, tool);
+        void setCaptureBadge(message.tabId, tool).catch(() => undefined);
+        return { ok: true, tool };
+      }
     case 'DEACTIVATE_TOOL':
       captureAbortControllers.get(message.tabId)?.abort();
       captureProgressStates.delete(message.tabId);
-      await sendToolCommand(message.tabId, 'idle');
-      tabStates.set(message.tabId, 'idle');
-      void setCaptureBadge(message.tabId, 'idle').catch(() => undefined);
-      return { ok: true, tool: 'idle' };
+      {
+        const tool = await sendToolCommand(message.tabId, 'idle');
+        tabStates.set(message.tabId, tool);
+        void setCaptureBadge(message.tabId, tool).catch(() => undefined);
+        return { ok: true, tool };
+      }
     case 'CAPTURE_VISIBLE_TAB': {
       if (sender.tab?.windowId === undefined) return { ok: false, error: '캡처할 탭을 확인할 수 없습니다.' };
       const dataUrl = await chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: 'png' });
@@ -266,8 +273,16 @@ function throwIfAborted(signal: AbortSignal): void {
 }
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, milliseconds);
-    signal.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('캡처가 중단되었습니다.', 'AbortError')); }, { once: true });
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new DOMException('캡처가 중단되었습니다.', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 function sanitizeTitle(title: string): string {
@@ -285,8 +300,10 @@ async function ensureContentScript(tabId: number): Promise<void> {
     }
   }
 }
-async function sendToolCommand(tabId: number, tool: ToolMode): Promise<void> {
-  await chrome.tabs.sendMessage(tabId, { type: 'TOOL_COMMAND', tool } satisfies ExtensionMessage);
+async function sendToolCommand(tabId: number, tool: ToolMode): Promise<ToolMode> {
+  const response = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, { type: 'TOOL_COMMAND', tool });
+  if (!response.ok) throw new Error(response.error);
+  return response.tool ?? tool;
 }
 async function queryContentState(tabId: number): Promise<{ tool: ToolMode; captureProgress?: CaptureProgressState; interactionsUnlocked?: boolean }> {
   try {

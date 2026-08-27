@@ -82,7 +82,7 @@ export class DesignOverlayController implements ToolLifecycle {
   };
   readonly #onPointerUp = (event: PointerEvent): void => {
     if (this.#drag?.pointerId !== event.pointerId) return;
-    this.#img?.releasePointerCapture(event.pointerId);
+    if (this.#img?.hasPointerCapture(event.pointerId) === true) this.#img.releasePointerCapture(event.pointerId);
     this.#drag = null;
   };
   readonly #onImageKeyDown = (event: KeyboardEvent): void => {

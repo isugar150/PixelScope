@@ -28,7 +28,7 @@ export class CssChangesController implements ToolLifecycle {
       onClose: this.#onExit,
     });
     this.#refresh();
-    void this.#loadDevtoolsBaseline();
+    void this.#loadResourceBaseline();
     this.#intervalId = window.setInterval(() => this.#refresh(), REFRESH_INTERVAL_MS);
     window.addEventListener('keydown', this.#onKeyDown, true);
   }
@@ -58,14 +58,19 @@ export class CssChangesController implements ToolLifecycle {
     this.#overlay?.update(this.#changes, current.unreadableStyleSheets);
   }
 
-  async #loadDevtoolsBaseline(): Promise<void> {
+  async #loadResourceBaseline(): Promise<void> {
     try {
-      const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse>({ type: 'GET_CSS_BASELINE' });
-      if (!this.#active || this.#baseline === null || !response.ok || response.cssBaseline === undefined) return;
+      if (this.#baseline === null) return;
+      const baselineAtRequest = this.#baseline;
+      const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse>({
+        type: 'GET_CSS_BASELINE',
+        styleSheetUrls: baselineAtRequest.styleSheetUrls ?? [],
+      });
+      if (!this.#active || this.#baseline !== baselineAtRequest || !response.ok || response.cssBaseline === undefined) return;
       if (response.cssBaseline.pageUrl !== '' && withoutHash(response.cssBaseline.pageUrl) !== withoutHash(location.href)) return;
-      this.#baseline = mergeCssResourceBaseline(this.#baseline, response.cssBaseline.resources);
+      this.#baseline = mergeCssResourceBaseline(baselineAtRequest, response.cssBaseline.resources);
       this.#refresh();
-    } catch { /* Extension context invalidated or no DevTools baseline is available. */ }
+    } catch { /* The extension context or a stylesheet request may no longer be available. */ }
   }
 
   #delete(change: CssRuleChange): void {

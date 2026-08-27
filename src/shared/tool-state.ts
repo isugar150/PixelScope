@@ -24,6 +24,15 @@ export const DEFAULT_SETTINGS: UserSettings = {
   designOverlayOpacity: 50, designOverlayBlendMode: 'normal', designOverlayScale: 'fit',
 };
 
+export function isToolMode(value: unknown): value is ToolMode {
+  return value === 'idle' || value === 'measure' || value === 'color-picker' || value === 'capture-element'
+    || value === 'capture-page' || value === 'design-overlay' || value === 'css-changes';
+}
+
+export function isActiveTool(value: unknown): value is ActiveTool {
+  return value !== 'idle' && isToolMode(value);
+}
+
 export function isCopyFormat(value: unknown): value is CopyFormat {
   return value === 'hex' || value === 'rgb' || value === 'hsl';
 }

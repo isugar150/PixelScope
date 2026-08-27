@@ -4,8 +4,8 @@ import { resolve } from 'node:path';
 
 test('privacy policy is bundled as a public standalone page', async () => {
   const extensionPath = resolve(import.meta.dirname, '../../dist');
-  const devtoolsBundle = await readFile(resolve(extensionPath, 'devtools.js'), 'utf8');
-  expect(devtoolsBundle).not.toMatch(/\bimport\s*(?:\(|["'{])/);
+  const manifest = JSON.parse(await readFile(resolve(extensionPath, 'manifest.json'), 'utf8')) as Record<string, unknown>;
+  expect(manifest).not.toHaveProperty('devtools_page');
   const context = await chromium.launchPersistentContext('', {
     headless: false,
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],

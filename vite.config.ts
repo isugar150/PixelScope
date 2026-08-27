@@ -9,7 +9,6 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    modulePreload: { polyfill: false },
     sourcemap: false,
     target: 'chrome109',
     rollupOptions: {
@@ -17,7 +16,6 @@ export default defineConfig({
         background: resolve(rootDirectory, 'src/background.ts'),
         content: resolve(rootDirectory, 'src/content/index.ts'),
         'shortcut-listener': resolve(rootDirectory, 'src/content/shortcut-listener.ts'),
-        devtools: resolve(rootDirectory, 'src/devtools/devtools.html'),
         popup: resolve(rootDirectory, 'src/popup/popup.html'),
         privacy: resolve(rootDirectory, 'privacy-policy.html'),
         viewer: resolve(rootDirectory, 'src/viewer/viewer.html'),

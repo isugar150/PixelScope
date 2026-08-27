@@ -16,6 +16,7 @@ export interface CssSnapshot {
   readonly rules: ReadonlyMap<string, CssRuleSnapshot>;
   readonly editableStyles?: ReadonlyMap<string, CSSStyleDeclaration>;
   readonly unreadableStyleSheets: number;
+  readonly styleSheetUrls?: readonly string[];
 }
 
 export type CssPropertyChange =
@@ -35,15 +36,21 @@ interface SnapshotAccumulator {
   readonly editableStyles: Map<string, CSSStyleDeclaration>;
   readonly duplicateCounts: Map<string, number>;
   readonly visitedSheets: WeakSet<CSSStyleSheet>;
+  readonly styleSheetUrls: Set<string>;
   unreadableStyleSheets: number;
 }
 
 export function collectCssSnapshot(root: Document = document): CssSnapshot {
   const accumulator: SnapshotAccumulator = {
-    rules: new Map(), editableStyles: new Map(), duplicateCounts: new Map(), visitedSheets: new WeakSet(), unreadableStyleSheets: 0,
+    rules: new Map(), editableStyles: new Map(), duplicateCounts: new Map(), visitedSheets: new WeakSet(), styleSheetUrls: new Set(), unreadableStyleSheets: 0,
   };
   collectRoot(root, accumulator, 'document');
-  return { rules: accumulator.rules, editableStyles: accumulator.editableStyles, unreadableStyleSheets: accumulator.unreadableStyleSheets };
+  return {
+    rules: accumulator.rules,
+    editableStyles: accumulator.editableStyles,
+    unreadableStyleSheets: accumulator.unreadableStyleSheets,
+    styleSheetUrls: [...accumulator.styleSheetUrls],
+  };
 }
 
 export function mergeCssResourceBaseline(current: CssSnapshot, resources: readonly { readonly url: string; readonly content: string }[]): CssSnapshot {
@@ -57,13 +64,13 @@ export function mergeCssResourceBaseline(current: CssSnapshot, resources: readon
     try { sheet.replaceSync(original); }
     catch { continue; }
     const accumulator: SnapshotAccumulator = {
-      rules: new Map(), editableStyles: new Map(), duplicateCounts: new Map(), visitedSheets: new WeakSet(), unreadableStyleSheets: 0,
+      rules: new Map(), editableStyles: new Map(), duplicateCounts: new Map(), visitedSheets: new WeakSet(), styleSheetUrls: new Set(), unreadableStyleSheets: 0,
     };
     collectRules(sheet.cssRules, accumulator, source, []);
     for (const [key, rule] of rules) if (rule.source === source) rules.delete(key);
     for (const [key, rule] of accumulator.rules) rules.set(key, rule);
   }
-  return { rules, editableStyles: current.editableStyles, unreadableStyleSheets: current.unreadableStyleSheets };
+  return { rules, editableStyles: current.editableStyles, unreadableStyleSheets: current.unreadableStyleSheets, styleSheetUrls: current.styleSheetUrls };
 }
 
 export function revertCssRuleChange(change: CssRuleChange, baseline: CssSnapshot, current: CssSnapshot): boolean {
@@ -133,6 +140,7 @@ function collectRoot(root: Document | ShadowRoot, accumulator: SnapshotAccumulat
 function collectStyleSheet(sheet: CSSStyleSheet, accumulator: SnapshotAccumulator, source: string): void {
   if (accumulator.visitedSheets.has(sheet)) return;
   accumulator.visitedSheets.add(sheet);
+  if (sheet.href !== null) accumulator.styleSheetUrls.add(sheet.href);
   let rules: CSSRuleList;
   try { rules = sheet.cssRules; }
   catch { accumulator.unreadableStyleSheets += 1; return; }
@@ -141,6 +149,10 @@ function collectStyleSheet(sheet: CSSStyleSheet, accumulator: SnapshotAccumulato
 
 function collectRules(rules: CSSRuleList, accumulator: SnapshotAccumulator, source: string, context: readonly string[]): void {
   for (const rule of rules) {
+    if (rule instanceof CSSImportRule && rule.styleSheet !== null) {
+      collectStyleSheet(rule.styleSheet, accumulator, rule.href);
+      continue;
+    }
     if (rule instanceof CSSStyleRule) {
       addRule(accumulator, source, context, rule.selectorText, rule.style);
       continue;

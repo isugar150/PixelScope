@@ -21,15 +21,24 @@ test('CSS changes tool reports CSSOM and inline style edits, resets, and exits w
     await expect.poll(() => page.locator('#target').evaluate((element) => getComputedStyle(element).color)).toBe('rgb(255, 0, 0)');
     const pageUrl = page.url();
     await page.evaluate(({ baselinePageUrl, baselineStyleSheetUrl, baselineCss }) => {
-      const testWindow = window as Window & { cssChangesListener?: (...args: unknown[]) => unknown; copiedCss?: string };
+      const testWindow = window as Window & {
+        cssChangesListener?: (...args: unknown[]) => unknown;
+        copiedCss?: string;
+        baselineRequestUrls?: readonly string[];
+      };
       Object.defineProperty(window.chrome, 'runtime', { configurable: true, value: {
         onMessage: {
           addListener: (listener: (...args: unknown[]) => unknown) => { testWindow.cssChangesListener = listener; },
           removeListener: () => undefined,
         },
-        sendMessage: (message: { type?: string }) => Promise.resolve(message.type === 'GET_CSS_BASELINE'
-          ? { ok: true, cssBaseline: { pageUrl: baselinePageUrl, capturedAt: Date.now(), resources: [{ url: baselineStyleSheetUrl, content: baselineCss }] } }
-          : { ok: true }),
+        sendMessage: (message: { type?: string; styleSheetUrls?: readonly string[] }) => {
+          if (message.type !== 'GET_CSS_BASELINE') return Promise.resolve({ ok: true });
+          testWindow.baselineRequestUrls = message.styleSheetUrls;
+          return Promise.resolve({
+            ok: true,
+            cssBaseline: { pageUrl: baselinePageUrl, capturedAt: Date.now(), resources: [{ url: baselineStyleSheetUrl, content: baselineCss }] },
+          });
+        },
       } });
       Object.defineProperty(window.chrome, 'storage', { configurable: true, value: { local: { get: () => Promise.resolve({}) } } });
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
@@ -51,6 +60,9 @@ test('CSS changes tool reports CSSOM and inline style edits, resets, and exits w
       const listener = (window as Window & { cssChangesListener?: (...args: unknown[]) => unknown }).cssChangesListener;
       await new Promise<void>((resolveActivation) => listener?.({ type: 'TOOL_COMMAND', tool: 'css-changes' }, {}, () => resolveActivation()));
     });
+    await expect.poll(() => page.evaluate(() => (
+      window as Window & { baselineRequestUrls?: readonly string[] }
+    ).baselineRequestUrls)).toEqual([styleSheetUrl]);
     const overlay = page.locator('[data-pixelscope-css-changes]');
     await expect(overlay).toHaveAttribute('data-pixelscope-css-property-count', '1');
     await page.evaluate(() => {

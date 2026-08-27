@@ -23,7 +23,6 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "devtools_page": "src/devtools/devtools.html",
   "action": {
     "default_title": "PixelScope 도구",
     "default_popup": "src/popup/popup.html",

@@ -7,32 +7,34 @@ export const CAPTURE_TTL_MS = 60 * 60 * 1000;
 
 export async function saveCapture(capture: StoredCapture): Promise<void> {
   const database = await openDatabase();
-  await transactionDone(database, 'readwrite', (store) => store.put(capture));
-  database.close();
+  try { await transactionDone(database, 'readwrite', (store) => store.put(capture)); }
+  finally { database.close(); }
 }
 
 export async function getCapture(id: string): Promise<StoredCapture | null> {
   const database = await openDatabase();
-  const value = await requestResult(database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(id) as IDBRequest<unknown>);
-  database.close();
-  return isStoredCapture(value) ? value : null;
+  try {
+    const value = await requestResult(database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(id) as IDBRequest<unknown>);
+    return isStoredCapture(value) ? value : null;
+  } finally { database.close(); }
 }
 
 export async function deleteCapture(id: string): Promise<void> {
   const database = await openDatabase();
-  await transactionDone(database, 'readwrite', (store) => store.delete(id));
-  database.close();
+  try { await transactionDone(database, 'readwrite', (store) => store.delete(id)); }
+  finally { database.close(); }
 }
 
 export async function deleteExpiredCaptures(now = Date.now()): Promise<void> {
   const database = await openDatabase();
-  const transaction = database.transaction(STORE_NAME, 'readwrite');
-  const store = transaction.objectStore(STORE_NAME);
-  const values = await requestResult(store.getAll() as IDBRequest<unknown>);
-  const captures = Array.isArray(values) ? values.filter(isStoredCapture) : [];
-  for (const capture of captures) if (now - capture.createdAt >= CAPTURE_TTL_MS) store.delete(capture.id);
-  await transactionComplete(transaction);
-  database.close();
+  try {
+    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const values = await requestResult(store.getAll() as IDBRequest<unknown>);
+    const captures = Array.isArray(values) ? values.filter(isStoredCapture) : [];
+    for (const capture of captures) if (now - capture.createdAt >= CAPTURE_TTL_MS) store.delete(capture.id);
+    await transactionComplete(transaction);
+  } finally { database.close(); }
 }
 
 function openDatabase(): Promise<IDBDatabase> {

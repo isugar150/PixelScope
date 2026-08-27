@@ -1,7 +1,7 @@
 import './popup.css';
 import type { ExtensionMessage, ExtensionResponse } from '../shared/messages';
 import type { CaptureProgressState } from '../shared/capture';
-import { DEFAULT_SETTINGS, isColorPickerScope, isCopyFormat, isDesignOverlayBlendMode, isDesignOverlayScale, isMeasurementUnit, type ActiveTool, type ColorPickerScope, type DesignOverlayBlendMode, type DesignOverlayScale, type ToolMode } from '../shared/tool-state';
+import { DEFAULT_SETTINGS, isActiveTool, isColorPickerScope, isCopyFormat, isDesignOverlayBlendMode, isDesignOverlayScale, isMeasurementUnit, type ActiveTool, type ColorPickerScope, type DesignOverlayBlendMode, type DesignOverlayScale, type ToolMode } from '../shared/tool-state';
 import { pickScreenColorInPage } from '../screen-color-picker';
 
 const COLOR_PICKER_SCOPE_VERSION = 1;
@@ -33,7 +33,9 @@ let lastCaptureProgress: CaptureProgressState | undefined;
 let designOverlayImageDataUrl: string | null = null;
 let interactionsUnlocked = false;
 
-void initialize();
+void initialize().catch((error: unknown) => {
+  showError(error instanceof Error ? error.message : String(error));
+});
 
 async function initialize(): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -77,7 +79,7 @@ for (const button of startButtons) {
     const tool = button.dataset.tool;
     if (tool !== undefined && button.getAttribute('aria-pressed') === 'true') { void deactivate(); return; }
     if (tool === 'color-picker' && getColorPickerScope() === 'screen') { startScreenColorPicker(); return; }
-    if (tool === 'measure' || tool === 'color-picker' || tool === 'capture-element' || tool === 'capture-page' || tool === 'design-overlay' || tool === 'css-changes') void activate(tool);
+    if (isActiveTool(tool)) void activate(tool);
   });
 }
 stopButton.addEventListener('click', () => void deactivate());
