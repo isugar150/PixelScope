@@ -201,6 +201,13 @@ export class CaptureController implements ToolLifecycle {
   }
 
   #captureElement(element: Element): void {
+    const scrollableOverlay = findScrollableOverlay(element);
+    if (scrollableOverlay !== null) {
+      this.#dialogTarget = scrollableOverlay;
+      this.#captureTarget = scrollableOverlay;
+      void this.#capture(this.#targetRect(), `${document.title} - ${scrollableOverlay.tagName.toLowerCase()}`);
+      return;
+    }
     this.#captureTarget = element;
     const source = element.getBoundingClientRect();
     const rect = { left: source.left + scrollX, top: source.top + scrollY, width: source.width, height: source.height };
@@ -228,7 +235,9 @@ export class CaptureController implements ToolLifecycle {
     try {
       if (this.#mode === 'element') await waitForPageFocus(abortController.signal);
       await waitForFonts(abortController.signal);
-      const captureRect = this.#mode === 'page' ? await this.#warmFullPage(abortController.signal) : rect;
+      const captureRect = this.#mode === 'page' || this.#dialogTarget !== null
+        ? await this.#warmFullPage(abortController.signal)
+        : rect;
       this.#overlay?.updatePreparingSize(captureRect);
       const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse>({
         type: 'CAPTURE_DOCUMENT', rect: captureRect, viewport: this.#targetClientSize(), screenshotViewport: { width: innerWidth, height: innerHeight },
@@ -330,7 +339,6 @@ export class CaptureController implements ToolLifecycle {
     document.documentElement.append(this.#captureStyle);
   }
   #setViewportFixedSuppressed(suppressed: boolean): void {
-    if (this.#dialogTarget !== null) return;
     if (!suppressed) {
       for (const [element, original] of this.#suppressedElements) {
         element.removeAttribute(FIXED_CAPTURE_ATTRIBUTE);
@@ -340,12 +348,18 @@ export class CaptureController implements ToolLifecycle {
       this.#suppressedElements.clear();
       return;
     }
+    const currentPosition = this.#targetPosition();
     const snapshotMoved = this.#viewportSnapshotPosition !== null
-      && (Math.abs(scrollX - this.#viewportSnapshotPosition.x) > 1 || Math.abs(scrollY - this.#viewportSnapshotPosition.y) > 1);
-    for (const element of capturePageElements()) {
+      && (Math.abs(currentPosition.x - this.#viewportSnapshotPosition.x) > 1
+        || Math.abs(currentPosition.y - this.#viewportSnapshotPosition.y) > 1);
+    const elements = this.#dialogTarget === null
+      ? capturePageElements()
+      : captureOverlayElements(this.#dialogTarget);
+    for (const element of elements) {
       if (element.hasAttribute('data-pixelscope-overlay') || this.#suppressedElements.has(element)
         || element.closest(`[${FIXED_CAPTURE_ATTRIBUTE}]`) !== null) continue;
-      if (this.#captureTarget !== null
+      if (this.#dialogTarget !== null && (element === this.#dialogTarget || element.contains(this.#dialogTarget))) continue;
+      if (this.#dialogTarget === null && this.#captureTarget !== null
         && (element === this.#captureTarget || element.contains(this.#captureTarget) || this.#captureTarget.contains(element))) continue;
       if (!isViewportAttached(element, snapshotMoved ? this.#viewportSnapshot.get(element) : undefined)) continue;
       this.#suppressedElements.set(element, {
@@ -357,11 +371,14 @@ export class CaptureController implements ToolLifecycle {
     }
   }
   #snapshotViewportElements(): void {
-    if (this.#dialogTarget !== null) return;
     this.#viewportSnapshot.clear();
-    this.#viewportSnapshotPosition = { x: scrollX, y: scrollY };
-    for (const element of capturePageElements()) {
+    this.#viewportSnapshotPosition = this.#targetPosition();
+    const elements = this.#dialogTarget === null
+      ? capturePageElements()
+      : captureOverlayElements(this.#dialogTarget);
+    for (const element of elements) {
       if (element.hasAttribute('data-pixelscope-overlay')) continue;
+      if (this.#dialogTarget !== null && (element === this.#dialogTarget || element.contains(this.#dialogTarget))) continue;
       const rect = element.getBoundingClientRect();
       if (intersectsViewport(rect)) this.#viewportSnapshot.set(element, rect);
     }
@@ -389,23 +406,38 @@ export class CaptureController implements ToolLifecycle {
  * capture would otherwise scroll nothing and produce duplicate tiles. This looks for the dialog's
  * own scrollable container so capture can scroll and tile through it instead.
  */
-function findScrollableOverlay(): HTMLElement | null {
+function findScrollableOverlay(relatedElement?: Element): HTMLElement | null {
   if (isPageScrollable()) return null;
   const viewportArea = innerWidth * innerHeight;
   let best: HTMLElement | null = null;
   let bestArea = 0;
   for (const element of document.body.querySelectorAll<HTMLElement>('*')) {
     if (element.hasAttribute('data-pixelscope-overlay')) continue;
+    if (relatedElement !== undefined && !element.contains(relatedElement) && !relatedElement.contains(element)) continue;
     if (element.scrollHeight <= element.clientHeight + 2) continue;
     const style = getComputedStyle(element);
-    if (style.position !== 'fixed' && style.position !== 'sticky') continue;
-    if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') continue;
+    if (!['auto', 'scroll', 'overlay'].includes(style.overflowY)) continue;
+    if (!hasViewportAttachedAncestor(element)) continue;
     const rect = element.getBoundingClientRect();
     const area = Math.max(0, rect.width) * Math.max(0, rect.height);
     if (area < viewportArea * 0.3 || area <= bestArea) continue;
     bestArea = area; best = element;
   }
   return best;
+}
+
+function hasViewportAttachedAncestor(element: HTMLElement): boolean {
+  return findViewportAttachedRoot(element) !== null;
+}
+
+function findViewportAttachedRoot(element: HTMLElement): HTMLElement | null {
+  let current: HTMLElement | null = element;
+  while (current !== null) {
+    const position = getComputedStyle(current).position;
+    if (position === 'fixed' || position === 'sticky') return current;
+    current = current.parentElement;
+  }
+  return null;
 }
 
 /**
@@ -484,6 +516,14 @@ function intersectsViewport(rect: DOMRect): boolean {
   return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
 }
 function capturePageElements(): HTMLElement[] {
+  return captureElements(document.body);
+}
+
+function captureOverlayElements(scrollTarget: HTMLElement): HTMLElement[] {
+  return captureElements(findViewportAttachedRoot(scrollTarget) ?? scrollTarget);
+}
+
+function captureElements(root: ParentNode): HTMLElement[] {
   const elements: HTMLElement[] = [];
   const visit = (root: ParentNode): void => {
     for (const element of root.querySelectorAll<HTMLElement>('*')) {
@@ -492,6 +532,6 @@ function capturePageElements(): HTMLElement[] {
       if (element.shadowRoot !== null) visit(element.shadowRoot);
     }
   };
-  visit(document.body);
+  visit(root);
   return elements;
 }

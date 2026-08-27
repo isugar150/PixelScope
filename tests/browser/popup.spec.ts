@@ -69,7 +69,7 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(pageScope).toBeChecked();
     await page.getByLabel('복사 형식').selectOption('rgb');
     await expect(page.getByText('화면 캡처', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: /객체 캡처/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /영역 캡처/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /전체 페이지/ })).toBeVisible();
     await expect(page.locator('#capture-state')).toBeHidden();
     await expect(page.locator('#capture-state-label')).toHaveText('캡처 페이지 계산 중');
@@ -442,6 +442,145 @@ test('object capture suppresses a fixed header and restores page styles', async 
       return button instanceof HTMLElement ? getComputedStyle(button).visibility : null;
     })).toBe('visible');
     await expect(page.locator('[data-pixelscope-capture-preparation]')).toHaveCount(0);
+  } finally { await context.close(); }
+});
+
+test('page and element capture scroll through a fixed modal nested scroller', async () => {
+  const extensionPath = resolve(import.meta.dirname, '../../dist');
+  const context = await chromium.launchPersistentContext('', {
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    const page = await context.newPage();
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.setContent(`<style>
+      html,body{position:fixed;inset:0;margin:0;overflow:hidden;width:100%;height:100%}
+      #modal{position:fixed;inset:0;overflow:hidden;background:white}
+      #dialog{position:relative;width:100%;height:100%;overflow:hidden}
+      #close{position:fixed;top:20px;right:20px;z-index:10}
+      #modal-body{width:100%;height:100%;overflow-y:auto}
+      #panel-content{height:1800px;background:linear-gradient(#123,#def)}
+    </style><div id="modal"><div id="dialog"><button id="close">Close</button><div id="modal-body"><div id="panel-content">Modal content</div></div></div></div>`);
+    await page.evaluate(() => {
+      interface CaptureRequest {
+        rect?: { height?: number };
+        viewport?: { height?: number };
+        viewportOffset?: { x?: number; y?: number };
+        preferredPosition?: { x?: number; y?: number };
+      }
+      const testWindow = window as Window & {
+        captureListener?: (...args: unknown[]) => unknown;
+        captureRequests?: CaptureRequest[];
+        resolveCapture?: (response: { ok: false; error: string }) => void;
+        scrollResponse?: { ok?: boolean; position?: { x?: number; y?: number } };
+      };
+      testWindow.captureRequests = [];
+      Object.defineProperty(window.chrome, 'runtime', { configurable: true, value: {
+        onMessage: {
+          addListener: (listener: (...args: unknown[]) => unknown) => { testWindow.captureListener = listener; },
+          removeListener: () => undefined,
+        },
+        sendMessage: (message: CaptureRequest & { type?: string }) => {
+          if (message.type !== 'CAPTURE_DOCUMENT') return Promise.resolve({ ok: true });
+          testWindow.captureRequests?.push(message);
+          return new Promise((resolveCapture) => { testWindow.resolveCapture = resolveCapture; });
+        },
+      } });
+      Object.defineProperty(window.chrome, 'storage', { configurable: true, value: { local: { get: () => Promise.resolve({}) } } });
+    });
+    await page.addScriptTag({ path: resolve(extensionPath, 'content.js') });
+
+    await page.locator('#modal-body').evaluate((element) => { element.scrollTop = 240; });
+    await page.evaluate(async () => {
+      const listener = (window as Window & { captureListener?: (...args: unknown[]) => unknown }).captureListener;
+      await new Promise<void>((resolveActivation) => listener?.({ type: 'TOOL_COMMAND', tool: 'capture-page' }, {}, () => resolveActivation()));
+    });
+    await expect.poll(() => page.evaluate(() => (window as Window & { captureRequests?: unknown[] }).captureRequests?.length ?? 0)).toBe(1);
+    expect(await page.evaluate(() => {
+      const request = (window as Window & { captureRequests?: Array<{
+        rect?: { height?: number };
+        viewport?: { height?: number };
+        viewportOffset?: { x?: number; y?: number };
+      }> }).captureRequests?.[0];
+      return {
+        height: request?.rect?.height,
+        viewportHeight: request?.viewport?.height,
+        viewportOffset: request?.viewportOffset,
+      };
+    })).toEqual({ height: 1800, viewportHeight: 600, viewportOffset: { x: 0, y: 0 } });
+    await page.evaluate(async () => {
+      const listener = (window as Window & { captureListener?: (...args: unknown[]) => unknown }).captureListener;
+      await new Promise<void>((resolveScroll) => listener?.(
+        { type: 'CAPTURE_SCROLL_TO', position: { x: 0, y: 0 }, suppressViewportFixed: false },
+        {},
+        () => resolveScroll(),
+      ));
+    });
+    await expect(page.locator('#close')).toHaveCSS('visibility', 'visible');
+    await page.evaluate(async () => {
+      const testWindow = window as Window & {
+        captureListener?: (...args: unknown[]) => unknown;
+        scrollResponse?: { ok?: boolean; position?: { x?: number; y?: number } };
+      };
+      await new Promise<void>((resolveScroll) => testWindow.captureListener?.(
+        { type: 'CAPTURE_SCROLL_TO', position: { x: 0, y: 600 }, suppressViewportFixed: true },
+        {},
+        (response: { ok?: boolean; position?: { x?: number; y?: number } }) => {
+          testWindow.scrollResponse = response;
+          resolveScroll();
+        },
+      ));
+    });
+    await expect(page.locator('#modal-body')).toHaveJSProperty('scrollTop', 600);
+    await expect(page.locator('#close')).toHaveCSS('visibility', 'hidden');
+    await expect(page.locator('#close')).toHaveAttribute('data-pixelscope-capture-fixed', '');
+    expect(await page.evaluate(() => (window as Window & { scrollResponse?: unknown }).scrollResponse)).toEqual({ ok: true, position: { x: 0, y: 600 } });
+    await page.evaluate(() => {
+      (window as Window & { resolveCapture?: (response: { ok: false; error: string }) => void }).resolveCapture?.({ ok: false, error: 'test page capture finished' });
+    });
+    await expect(page.locator('#modal-body')).toHaveJSProperty('scrollTop', 240);
+    await expect(page.locator('#close')).toHaveCSS('visibility', 'visible');
+    await expect(page.locator('#close')).not.toHaveAttribute('data-pixelscope-capture-fixed');
+
+    await page.evaluate(() => {
+      const testWindow = window as Window & { captureRequests?: unknown[] };
+      testWindow.captureRequests = [];
+      const modalBody = document.getElementById('modal-body');
+      if (modalBody !== null) modalBody.scrollTop = 320;
+    });
+    await page.evaluate(async () => {
+      const listener = (window as Window & { captureListener?: (...args: unknown[]) => unknown }).captureListener;
+      await new Promise<void>((resolveActivation) => listener?.({ type: 'TOOL_COMMAND', tool: 'capture-element' }, {}, () => resolveActivation()));
+    });
+    await page.mouse.click(400, 300);
+    await expect.poll(() => page.evaluate(() => (window as Window & { captureRequests?: unknown[] }).captureRequests?.length ?? 0)).toBe(1);
+    expect(await page.evaluate(() => {
+      const request = (window as Window & { captureRequests?: Array<{
+        rect?: { height?: number };
+        viewport?: { height?: number };
+        preferredPosition?: { x?: number; y?: number };
+      }> }).captureRequests?.[0];
+      return {
+        height: request?.rect?.height,
+        viewportHeight: request?.viewport?.height,
+        preferredPosition: request?.preferredPosition,
+      };
+    })).toEqual({ height: 1800, viewportHeight: 600, preferredPosition: { x: 0, y: 320 } });
+    await page.evaluate(async () => {
+      const listener = (window as Window & { captureListener?: (...args: unknown[]) => unknown }).captureListener;
+      await new Promise<void>((resolveScroll) => listener?.(
+        { type: 'CAPTURE_SCROLL_TO', position: { x: 0, y: 320 }, suppressViewportFixed: true },
+        {},
+        () => resolveScroll(),
+      ));
+    });
+    await expect(page.locator('#close')).toHaveCSS('visibility', 'hidden');
+    await page.evaluate(() => {
+      (window as Window & { resolveCapture?: (response: { ok: false; error: string }) => void }).resolveCapture?.({ ok: false, error: 'test element capture finished' });
+    });
+    await expect(page.locator('#modal-body')).toHaveJSProperty('scrollTop', 320);
+    await expect(page.locator('#close')).toHaveCSS('visibility', 'visible');
   } finally { await context.close(); }
 });
 
