@@ -2,9 +2,26 @@ import { cssBaselineStorageKey, type CssResourceBaseline, type DevtoolsCssBaseli
 
 const MAX_BASELINE_CHARACTERS = 650_000;
 let captureSequence = 0;
+let captureStopped = false;
 
-void captureBaseline('');
-chrome.devtools.network.onNavigated.addListener((url) => { void captureBaseline(url); });
+const onNavigated = (url: string): void => scheduleBaselineCapture(url);
+
+scheduleBaselineCapture('');
+chrome.devtools.network.onNavigated.addListener(onNavigated);
+
+function scheduleBaselineCapture(pageUrl: string): void {
+  if (captureStopped) return;
+  void captureBaseline(pageUrl).catch((error: unknown) => {
+    if (isExtensionContextInvalidated(error)) {
+      captureStopped = true;
+      captureSequence += 1;
+      try { chrome.devtools.network.onNavigated.removeListener(onNavigated); }
+      catch { /* The stale DevTools context can no longer remove its listener. */ }
+      return;
+    }
+    console.warn('[PixelScope] CSS baseline capture failed.', error);
+  });
+}
 
 async function captureBaseline(pageUrl: string): Promise<void> {
   const sequence = ++captureSequence;
@@ -45,4 +62,10 @@ function getResourceContent(resource: chrome.devtools.inspectedWindow.Resource):
 function normalizeUrl(url: string): string {
   try { return new URL(url).href; }
   catch { return url; }
+}
+
+function isExtensionContextInvalidated(error: unknown): boolean {
+  if (error instanceof Error && /Extension context invalidated/i.test(error.message)) return true;
+  try { return typeof chrome.runtime.id !== 'string'; }
+  catch { return true; }
 }
