@@ -15,10 +15,13 @@ export type ScrollSnapshot = readonly ScrollSnapshotEntry[];
  */
 export function captureScrollSnapshot(point: Point, overlayHost?: Element | null): ScrollSnapshot {
   const snapshot: ScrollSnapshotEntry[] = [];
+  const pageScroller = document.scrollingElement ?? document.documentElement;
   let node: Element | null = document.elementFromPoint(point.x, point.y);
   while (node !== null) {
     if (node === overlayHost) break;
-    if (isScrollableElement(node)) snapshot.push({ anchor: { kind: 'element', node }, x: node.scrollLeft, y: node.scrollTop });
+    if (node !== pageScroller && isScrollableElement(node)) {
+      snapshot.push({ anchor: { kind: 'element', node }, x: node.scrollLeft, y: node.scrollTop });
+    }
     node = node.parentElement;
   }
   snapshot.push({ anchor: { kind: 'window' }, x: window.scrollX, y: window.scrollY });

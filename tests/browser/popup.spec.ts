@@ -708,3 +708,64 @@ test('measure mode blocks page clicks and Escape restores the page', async () =>
     await expect.poll(() => page.evaluate(() => (window as Window & { linkClicks?: number }).linkClicks)).toBe(2);
   } finally { await context.close(); }
 });
+
+test('saved area measurement stays aligned after Escape and page scrolling', async () => {
+  const extensionPath = resolve(import.meta.dirname, '../../dist');
+  const context = await chromium.launchPersistentContext('', {
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.setContent('<div style="height:2000px;background:white"></div>');
+    await page.evaluate(() => {
+      const testWindow = window as Window & { measureListener?: (...args: unknown[]) => unknown };
+      Object.defineProperty(window.chrome, 'runtime', { configurable: true, value: {
+        onMessage: {
+          addListener: (listener: (...args: unknown[]) => unknown) => { testWindow.measureListener = listener; },
+          removeListener: () => undefined,
+        },
+        sendMessage: () => Promise.resolve({ ok: false, error: 'capture unavailable in test' }),
+      } });
+      Object.defineProperty(window.chrome, 'storage', { configurable: true, value: {
+        local: { get: () => Promise.resolve({ measurementUnit: 'px' }) },
+      } });
+    });
+    await page.addScriptTag({ path: resolve(extensionPath, 'content.js') });
+    await page.evaluate(async () => {
+      const listener = (window as Window & { measureListener?: (...args: unknown[]) => unknown }).measureListener;
+      await new Promise<void>((resolveActivation) => listener?.({ type: 'TOOL_COMMAND', tool: 'measure' }, {}, () => resolveActivation()));
+    });
+
+    await page.mouse.move(100, 400);
+    await page.mouse.down();
+    await page.mouse.move(300, 500, { steps: 3 });
+    await page.mouse.up();
+    const savedAreaTop = async (): Promise<number | null> => {
+      const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+      const findSavedArea = (node: typeof root): number | null => {
+        const attributes = node.attributes ?? [];
+        const classIndex = attributes.indexOf('class');
+        const classes = classIndex < 0 ? [] : (attributes[classIndex + 1] ?? '').split(/\s+/);
+        if (classes.includes('box') && classes.includes('saved') && !classes.includes('element')) return node.nodeId;
+        for (const child of [...(node.children ?? []), ...(node.shadowRoots ?? [])]) {
+          const found = findSavedArea(child);
+          if (found !== null) return found;
+        }
+        return null;
+      };
+      const nodeId = findSavedArea(root);
+      if (nodeId === null) return null;
+      const { model } = await cdp.send('DOM.getBoxModel', { nodeId });
+      return Math.min(...model.border.filter((_coordinate, index) => index % 2 === 1));
+    };
+    await expect.poll(savedAreaTop).toBe(400);
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveAttribute('data-pixelscope-selection-mode', 'viewing');
+    await page.evaluate(() => window.scrollTo(0, 200));
+    await expect.poll(savedAreaTop).toBe(200);
+  } finally { await context.close(); }
+});

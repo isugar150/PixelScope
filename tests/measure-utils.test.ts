@@ -1,9 +1,18 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest';
-import { calculateMagnifierPosition, describeElement, elementRect, findInspectableElement, formatMeasurement, isAreaDrag } from '../src/content/measure-utils';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { calculateMagnifierPosition, captureScrollSnapshot, describeElement, elementRect, findInspectableElement, formatMeasurement, isAreaDrag, resolveScrollDelta } from '../src/content/measure-utils';
 import { calculateSelectionGuidePosition, formatMeasurementInfo } from '../src/content/overlay';
 
 describe('measure interaction helpers', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(document, 'elementFromPoint');
+    Reflect.deleteProperty(document, 'scrollingElement');
+    for (const key of ['scrollTop', 'scrollHeight', 'clientHeight', 'scrollWidth', 'clientWidth']) {
+      Reflect.deleteProperty(document.documentElement, key);
+    }
+  });
+
   it('moves the selection guide away from the pointer at both viewport edges', () => {
     expect(calculateSelectionGuidePosition('top', 20, { top: 8, bottom: 44 }, 800)).toBe('bottom');
     expect(calculateSelectionGuidePosition('bottom', 400, { top: 756, bottom: 792 }, 800)).toBe('bottom');
@@ -57,8 +66,39 @@ describe('measure interaction helpers', () => {
     expect(formatMeasurement(160, 80, 'rem')).toBe('10 × 5 rem');
     expect(formatMeasurement(window.innerWidth / 2, window.innerHeight / 4, 'viewport')).toBe('50vw × 25vh');
   });
+
+  it('counts page scrolling once while preserving nested scroll-container movement', () => {
+    const nested = document.createElement('div');
+    const child = document.createElement('span');
+    nested.append(child);
+    document.body.append(nested);
+    mockScrollable(nested, { scrollTop: 20, scrollHeight: 500, clientHeight: 100 });
+    mockScrollable(document.documentElement, { scrollTop: 100, scrollHeight: 1_500, clientHeight: 768 });
+    Object.defineProperty(document, 'scrollingElement', { configurable: true, value: document.documentElement });
+    let windowScrollY = 100;
+    vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => windowScrollY);
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: vi.fn(() => child) });
+
+    const snapshot = captureScrollSnapshot({ x: 20, y: 30 });
+    nested.scrollTop = 50;
+    document.documentElement.scrollTop = 140;
+    windowScrollY = 140;
+
+    expect(resolveScrollDelta(snapshot)).toEqual({ x: 0, y: 70 });
+    nested.remove();
+  });
 });
 
 function rect(left: number, top: number, width: number, height: number): DOMRect {
   return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) };
+}
+
+function mockScrollable(element: Element, values: { readonly scrollTop: number; readonly scrollHeight: number; readonly clientHeight: number }): void {
+  Object.defineProperties(element, {
+    scrollTop: { configurable: true, writable: true, value: values.scrollTop },
+    scrollHeight: { configurable: true, value: values.scrollHeight },
+    clientHeight: { configurable: true, value: values.clientHeight },
+    scrollWidth: { configurable: true, value: 0 },
+    clientWidth: { configurable: true, value: 0 },
+  });
 }
