@@ -1,4 +1,4 @@
-export type ToolMode = 'idle' | 'measure' | 'color-picker' | 'capture-element' | 'capture-page' | 'design-overlay' | 'css-changes';
+export type ToolMode = 'idle' | 'measure' | 'color-picker' | 'capture-element' | 'capture-page' | 'design-overlay';
 export type ActiveTool = Exclude<ToolMode, 'idle'>;
 export type CopyFormat = 'hex' | 'rgb' | 'hsl';
 export type MeasurementUnit = 'px' | 'rem' | 'viewport';
@@ -26,7 +26,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
 
 export function isToolMode(value: unknown): value is ToolMode {
   return value === 'idle' || value === 'measure' || value === 'color-picker' || value === 'capture-element'
-    || value === 'capture-page' || value === 'design-overlay' || value === 'css-changes';
+    || value === 'capture-page' || value === 'design-overlay';
 }
 
 export function isActiveTool(value: unknown): value is ActiveTool {

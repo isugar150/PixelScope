@@ -39,8 +39,7 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.locator('.app-logo')).toHaveAttribute('src', '/icons/icon-48.png');
     await expect(page.getByRole('button', { name: '영역 측정', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '컬러 피커', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'CSS 변경 추출', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'CSS 변경 추출', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByRole('button', { name: 'CSS 변경 추출', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '우클릭·드래그 해제', exact: true })).toHaveAttribute('aria-keyshortcuts', 'Alt+`');
     await expect(page.getByRole('button', { name: '우클릭·드래그 해제', exact: true })).toHaveAttribute('aria-pressed', 'false');
     await expect(page.locator('#unlock-interactions .lock-shackle')).toHaveCSS('transform', 'none');
@@ -97,7 +96,6 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     await expect(page.locator('#stop')).toBeVisible();
     await expect(page.locator('[data-tool-card="measure"]')).toBeHidden();
     await expect(page.locator('[data-tool-card="color-picker"]')).toBeHidden();
-    await expect(page.locator('[data-tool-card="css-changes"]')).toBeHidden();
     await expect(page.locator('[data-tool-card="unlock-interactions"]')).toBeHidden();
     await expect(page.locator('[data-tool-card="capture"]')).toBeHidden();
     await page.keyboard.press('Tab');

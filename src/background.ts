@@ -4,7 +4,6 @@ import { isExtensionMessage, type ExtensionMessage, type ExtensionResponse } fro
 import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './shared/capture';
 import type { ToolMode } from './shared/tool-state';
 import { installPageInteractionUnlock } from './page-interaction-unlock-main';
-import { loadCssResourceBaseline } from './css-baseline-loader';
 
 class FileAccessRequiredError extends Error {
   readonly code = 'file-access-required' as const;
@@ -57,17 +56,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.MessageSender): Promise<ExtensionResponse> {
   switch (message.type) {
-    case 'GET_CSS_BASELINE': {
-      const resources = await loadCssResourceBaseline(message.styleSheetUrls);
-      return {
-        ok: true,
-        cssBaseline: {
-          pageUrl: sender.tab?.url ?? sender.url ?? '',
-          capturedAt: Date.now(),
-          resources,
-        },
-      };
-    }
     case 'GET_TOOL_STATE': {
       if (message.tabId === undefined) return { ok: true, tool: 'idle' };
       const cachedTool = tabStates.get(message.tabId);

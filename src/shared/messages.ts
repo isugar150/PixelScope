@@ -1,10 +1,8 @@
 import { isActiveTool, isDesignOverlayBlendMode, isDesignOverlayScale, isToolMode, type ActiveTool, type DesignOverlayBlendMode, type DesignOverlayScale, type ToolMode } from './tool-state';
 import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './capture';
-import type { CssBaseline } from './css-baseline';
 
 export type ExtensionMessage =
   | { readonly type: 'GET_TOOL_STATE'; readonly tabId?: number }
-  | { readonly type: 'GET_CSS_BASELINE'; readonly styleSheetUrls: readonly string[] }
   | { readonly type: 'TOGGLE_PAGE_INTERACTION_UNLOCK'; readonly tabId?: number }
   | { readonly type: 'ACTIVATE_TOOL'; readonly tabId: number; readonly tool: ActiveTool }
   | { readonly type: 'DEACTIVATE_TOOL'; readonly tabId: number }
@@ -19,7 +17,7 @@ export type ExtensionMessage =
   | { readonly type: 'TOOL_STATE_CHANGED'; readonly tool: ToolMode };
 
 export type ExtensionResponse =
-  | { readonly ok: true; readonly tool?: ToolMode; readonly dataUrl?: string; readonly captureId?: string; readonly position?: CaptureScrollPosition; readonly captureProgress?: CaptureProgressState; readonly cssBaseline?: CssBaseline; readonly interactionsUnlocked?: boolean }
+  | { readonly ok: true; readonly tool?: ToolMode; readonly dataUrl?: string; readonly captureId?: string; readonly position?: CaptureScrollPosition; readonly captureProgress?: CaptureProgressState; readonly interactionsUnlocked?: boolean }
   | { readonly ok: false; readonly error: string; readonly code?: 'file-access-required' };
 
 export function isExtensionMessage(value: unknown): value is ExtensionMessage {
@@ -28,11 +26,6 @@ export function isExtensionMessage(value: unknown): value is ExtensionMessage {
     case 'GET_TOOL_STATE': return !('tabId' in value) || hasTabId(value, 'tabId');
     case 'CAPTURE_VISIBLE_TAB':
     case 'CAPTURE_CANCEL': return true;
-    case 'GET_CSS_BASELINE':
-      return 'styleSheetUrls' in value && Array.isArray(value.styleSheetUrls)
-        && value.styleSheetUrls.length <= 512
-        && value.styleSheetUrls.every((url: unknown) => typeof url === 'string')
-        && value.styleSheetUrls.reduce((total: number, url: string) => total + url.length, 0) <= 700_000;
     case 'TOGGLE_PAGE_INTERACTION_UNLOCK': return !('tabId' in value) || hasTabId(value, 'tabId');
     case 'ACTIVATE_TOOL':
       return hasTabId(value, 'tabId') && 'tool' in value && isActiveTool(value.tool);

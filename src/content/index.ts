@@ -2,7 +2,6 @@ import type { ExtensionMessage, ExtensionResponse } from '../shared/messages';
 import type { DesignOverlayBlendMode, DesignOverlayScale, ToolMode } from '../shared/tool-state';
 import { ColorPickerController } from './color-picker/color-picker-controller';
 import { CaptureController } from './capture/capture-controller';
-import { CssChangesController } from './css-changes/css-changes-controller';
 import { DesignOverlayController } from './design-overlay/design-overlay-controller';
 import { MeasureController } from './measure-controller';
 import { PageInteractionUnlocker } from './page-interaction-unlocker';
@@ -47,7 +46,6 @@ const controller = new ToolController({
     designOverlayController = new DesignOverlayController(exit);
     return designOverlayController;
   },
-  cssChanges: () => new CssChangesController(exit),
 });
 let captureController: CaptureController | null = null;
 let designOverlayController: DesignOverlayController | null = null;
@@ -154,7 +152,7 @@ function isContentMessage(value: unknown): value is
 // Keep this runtime guard local so the injected content bundle remains a standalone IIFE.
 function isToolMode(value: unknown): value is ToolMode {
   return value === 'idle' || value === 'measure' || value === 'color-picker' || value === 'capture-element'
-    || value === 'capture-page' || value === 'design-overlay' || value === 'css-changes';
+    || value === 'capture-page' || value === 'design-overlay';
 }
 
 function removeStaleArtifacts(): void {
