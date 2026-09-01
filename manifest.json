@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PixelScope - 웹 개발 유틸 모음",
   "short_name": "PixelScope",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Measure page regions, inspect colors, and capture page content without changing page layout.",
   "icons": {
     "16": "icons/icon-16.png",
