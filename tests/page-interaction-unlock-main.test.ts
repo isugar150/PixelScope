@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { installPageInteractionUnlock } from '../src/page-interaction-unlock-main';
 
 describe('main-world page interaction unlock', () => {
@@ -41,5 +41,33 @@ describe('main-world page interaction unlock', () => {
     const allowed = target.dispatchEvent(new Event('contextmenu', { bubbles: true, cancelable: true }));
 
     expect(allowed).toBe(false);
+  });
+
+  it('keeps Alt+Backquote observable when an earlier page listener stops immediate propagation', () => {
+    const pageBlocker = (event: KeyboardEvent): void => event.stopImmediatePropagation();
+    const shortcutListener = vi.fn();
+    window.addEventListener('keydown', pageBlocker, true);
+    window.addEventListener('keydown', shortcutListener, true);
+    try {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Backquote', altKey: true }));
+      expect(shortcutListener).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('keydown', pageBlocker, true);
+      window.removeEventListener('keydown', shortcutListener, true);
+    }
+  });
+
+  it('preserves immediate propagation blocking for unrelated keys', () => {
+    const pageBlocker = (event: KeyboardEvent): void => event.stopImmediatePropagation();
+    const laterListener = vi.fn();
+    window.addEventListener('keydown', pageBlocker, true);
+    window.addEventListener('keydown', laterListener, true);
+    try {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyA' }));
+      expect(laterListener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', pageBlocker, true);
+      window.removeEventListener('keydown', laterListener, true);
+    }
   });
 });
