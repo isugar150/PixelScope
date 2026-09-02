@@ -14,7 +14,7 @@ describe('page interaction unlocker', () => {
     vi.useRealTimers();
   });
 
-  it('toggles selection overrides on and removes its status toast after three seconds', () => {
+  it('toggles selection overrides on and removes its status toast after one second', () => {
     unlocker = new PageInteractionUnlocker();
     expect(unlocker.toggle()).toBe(true);
     expect(unlocker.active).toBe(true);

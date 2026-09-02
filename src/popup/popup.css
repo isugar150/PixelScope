@@ -1,5 +1,7 @@
 :root {
   color-scheme: light;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
   --canvas: #f7f3fd;
   --panel: #ffffff;
   --panel-hover: #f4eefc;

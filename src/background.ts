@@ -17,6 +17,9 @@ function isRestrictedPageError(message: string): boolean {
 }
 
 const CONTENT_SCRIPT = 'content.js';
+const SHORTCUT_SCRIPT = 'shortcut-listener.js';
+const UNLOCKED_ATTRIBUTE = 'data-pixelscope-interactions-unlocked';
+const TOOL_ACTIVE_ATTRIBUTE = 'data-pixelscope-tool-active';
 const CAPTURE_INTERVAL_MS = 550;
 const MAX_CANVAS_DIMENSION = 32_767;
 const MAX_CANVAS_PIXELS = 268_000_000;
@@ -25,7 +28,16 @@ const captureAbortControllers = new Map<number, AbortController>();
 const captureProgressStates = new Map<number, CaptureProgressState>();
 const viewerCaptures = new Map<number, string>();
 
+interface PageInteractionState {
+  readonly enabled: boolean;
+  readonly toolActive: boolean;
+}
+
 void deleteExpiredCaptures().catch(() => undefined);
+
+chrome.runtime.onInstalled.addListener(() => {
+  void restoreInteractionRuntimes().catch(() => undefined);
+});
 
 chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
   if (!isExtensionMessage(raw)) return false;
@@ -59,17 +71,28 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
     case 'GET_TOOL_STATE': {
       if (message.tabId === undefined) return { ok: true, tool: 'idle' };
       const cachedTool = tabStates.get(message.tabId);
-      const contentState = await queryContentState(message.tabId);
+      const [contentState, interactionState] = await Promise.all([
+        queryContentState(message.tabId),
+        readPageInteractionState(message.tabId).catch(() => ({ enabled: false, toolActive: false })),
+      ]);
       const tool = isCapturingTool(cachedTool) ? cachedTool : contentState.tool;
       tabStates.set(message.tabId, tool);
-      return { ok: true, tool, captureProgress: captureProgressStates.get(message.tabId) ?? contentState.captureProgress, interactionsUnlocked: contentState.interactionsUnlocked };
+      return { ok: true, tool, captureProgress: captureProgressStates.get(message.tabId) ?? contentState.captureProgress, interactionsUnlocked: interactionState.enabled };
     }
     case 'TOGGLE_PAGE_INTERACTION_UNLOCK': {
       const targetTabId = message.tabId ?? sender.tab?.id;
       if (targetTabId === undefined) return { ok: false, error: '현재 탭을 확인할 수 없습니다.' };
-      await ensureContentScript(targetTabId);
-      await chrome.scripting.executeScript({ target: { tabId: targetTabId }, world: 'MAIN', func: installPageInteractionUnlock });
-      return await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(targetTabId, { type: 'TOGGLE_PAGE_INTERACTION_UNLOCK' });
+      const currentState = await readPageInteractionState(targetTabId);
+      const nextState = { enabled: !currentState.enabled, toolActive: currentState.toolActive };
+      await refreshInteractionRuntime(targetTabId, nextState, true);
+      return { ok: true, interactionsUnlocked: nextState.enabled, toolActive: nextState.toolActive };
+    }
+    case 'GET_PAGE_INTERACTION_UNLOCK_STATE': {
+      const targetTabId = sender.tab?.id;
+      if (targetTabId === undefined) return { ok: false, error: '현재 탭을 확인할 수 없습니다.' };
+      const state = await readPageInteractionState(targetTabId);
+      if (state.enabled && sender.frameId !== undefined) await installInteractionMainWorld(targetTabId, [sender.frameId]);
+      return { ok: true, interactionsUnlocked: state.enabled, toolActive: state.toolActive };
     }
     case 'ACTIVATE_TOOL':
       await ensureContentScript(message.tabId);
@@ -77,7 +100,9 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         const tool = await sendToolCommand(message.tabId, message.tool);
         tabStates.set(message.tabId, tool);
         void setCaptureBadge(message.tabId, tool).catch(() => undefined);
-        return { ok: true, tool };
+        const interactionState = await readPageInteractionState(message.tabId);
+        await refreshInteractionRuntime(message.tabId, { enabled: interactionState.enabled, toolActive: tool !== 'idle' }, false);
+        return { ok: true, tool, interactionsUnlocked: interactionState.enabled };
       }
     case 'DEACTIVATE_TOOL':
       captureAbortControllers.get(message.tabId)?.abort();
@@ -86,7 +111,9 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         const tool = await sendToolCommand(message.tabId, 'idle');
         tabStates.set(message.tabId, tool);
         void setCaptureBadge(message.tabId, tool).catch(() => undefined);
-        return { ok: true, tool };
+        const interactionState = await readPageInteractionState(message.tabId);
+        await refreshInteractionRuntime(message.tabId, { enabled: interactionState.enabled, toolActive: false }, false);
+        return { ok: true, tool, interactionsUnlocked: interactionState.enabled };
       }
     case 'CAPTURE_VISIBLE_TAB': {
       if (sender.tab?.windowId === undefined) return { ok: false, error: '캡처할 탭을 확인할 수 없습니다.' };
@@ -112,9 +139,12 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       if (sender.tab?.id !== undefined) {
         tabStates.set(sender.tab.id, message.tool);
         void setCaptureBadge(sender.tab.id, message.tool).catch(() => undefined);
+        const interactionState = await readPageInteractionState(sender.tab.id).catch(() => ({ enabled: false, toolActive: false }));
+        await broadcastInteractionState(sender.tab.id, { enabled: interactionState.enabled, toolActive: message.tool !== 'idle' }, false).catch(() => undefined);
       }
       return { ok: true, tool: message.tool };
     case 'TOOL_COMMAND':
+    case 'SET_PAGE_INTERACTION_UNLOCK':
     case 'CAPTURE_SCROLL_TO':
     case 'CAPTURE_PROGRESS': return { ok: false, error: '잘못된 메시지 발신자입니다.' };
   }
@@ -288,6 +318,59 @@ async function ensureContentScript(tabId: number): Promise<void> {
     }
   }
 }
+
+async function readPageInteractionState(tabId: number): Promise<PageInteractionState> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] },
+    func: (unlockedAttribute: string, toolActiveAttribute: string) => ({
+      enabled: document.documentElement.hasAttribute(unlockedAttribute),
+      toolActive: document.documentElement.hasAttribute(toolActiveAttribute),
+    }),
+    args: [UNLOCKED_ATTRIBUTE, TOOL_ACTIVE_ATTRIBUTE],
+  });
+  const state = results[0]?.result;
+  if (state === undefined) return { enabled: false, toolActive: false };
+  return state;
+}
+
+async function installInteractionMainWorld(tabId: number, frameIds?: readonly number[]): Promise<void> {
+  if (frameIds === undefined) {
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: 'MAIN', func: installPageInteractionUnlock });
+    return;
+  }
+  await chrome.scripting.executeScript({ target: { tabId, frameIds: [...frameIds] }, world: 'MAIN', func: installPageInteractionUnlock });
+}
+
+async function injectInteractionRuntime(tabId: number): Promise<void> {
+  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: [SHORTCUT_SCRIPT] });
+}
+
+async function broadcastInteractionState(tabId: number, state: PageInteractionState, announce: boolean): Promise<void> {
+  await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, {
+    type: 'SET_PAGE_INTERACTION_UNLOCK',
+    enabled: state.enabled,
+    toolActive: state.toolActive,
+    announce,
+  });
+}
+
+async function refreshInteractionRuntime(tabId: number, state: PageInteractionState, announce: boolean): Promise<void> {
+  await injectInteractionRuntime(tabId);
+  await installInteractionMainWorld(tabId);
+  await broadcastInteractionState(tabId, state, announce);
+}
+
+async function restoreInteractionRuntimes(): Promise<void> {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs.map(async (tab) => {
+    if (tab.id === undefined) return;
+    try {
+      const state = await readPageInteractionState(tab.id);
+      await refreshInteractionRuntime(tab.id, state, false);
+    } catch { /* Restricted and discarded tabs are initialized when they become accessible. */ }
+  }));
+}
+
 async function sendToolCommand(tabId: number, tool: ToolMode): Promise<ToolMode> {
   const response = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, { type: 'TOOL_COMMAND', tool });
   if (!response.ok) throw new Error(response.error);

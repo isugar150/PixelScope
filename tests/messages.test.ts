@@ -5,6 +5,8 @@ describe('extension message validation', () => {
   it('accepts valid tool and capture messages', () => {
     expect(isExtensionMessage({ type: 'ACTIVATE_TOOL', tabId: 1, tool: 'measure' })).toBe(true);
     expect(isExtensionMessage({ type: 'CAPTURE_REGION', rect: { left: 0, top: 0, width: 10, height: 20 }, screenshotViewport: { width: 390, height: 844 }, title: 'capture' })).toBe(true);
+    expect(isExtensionMessage({ type: 'GET_PAGE_INTERACTION_UNLOCK_STATE' })).toBe(true);
+    expect(isExtensionMessage({ type: 'SET_PAGE_INTERACTION_UNLOCK', enabled: true, toolActive: false, announce: true })).toBe(true);
   });
 
   it('rejects non-finite geometry, invalid tab ids, and impossible progress', () => {
@@ -14,5 +16,6 @@ describe('extension message validation', () => {
     expect(isExtensionMessage({ type: 'CAPTURE_PROGRESS', completed: 3, total: 2 })).toBe(false);
     expect(isExtensionMessage({ type: 'ACTIVATE_TOOL', tabId: 1, tool: 'css-changes' })).toBe(false);
     expect(isExtensionMessage({ type: 'TOOL_COMMAND', tool: 'css-changes' })).toBe(false);
+    expect(isExtensionMessage({ type: 'SET_PAGE_INTERACTION_UNLOCK', enabled: true, toolActive: 'false', announce: true })).toBe(false);
   });
 });

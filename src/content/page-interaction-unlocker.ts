@@ -15,8 +15,12 @@ export class PageInteractionUnlocker {
 
   public toggle(): boolean {
     const enabled = !this.active;
-    this.#setEnabled(enabled, true);
+    this.setEnabled(enabled, true);
     return enabled;
+  }
+
+  public setEnabled(enabled: boolean, announce: boolean): void {
+    this.#setEnabled(enabled, announce);
   }
 
   public dispose(): void {

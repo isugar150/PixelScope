@@ -35,8 +35,28 @@ test('popup exposes keyboard-accessible tools and persisted settings', async () 
     const extensionId = new URL(worker.url()).host;
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/src/popup/popup.html`);
+    await page.setViewportSize({ width: 360, height: 600 });
     await expect(page.getByRole('heading', { name: 'PixelScope' })).toBeVisible();
     await expect(page.locator('.app-logo')).toHaveAttribute('src', '/icons/icon-48.png');
+    const scrollbarLayout = await page.evaluate(async () => {
+      const root = document.documentElement;
+      const widthWithoutOverflow = root.clientWidth;
+      const spacer = document.createElement('div');
+      spacer.style.height = '1000px';
+      document.body.append(spacer);
+      await new Promise<void>((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => resolveFrame())));
+      const result = {
+        gutter: getComputedStyle(root).scrollbarGutter,
+        overflowed: root.scrollHeight > root.clientHeight,
+        widthWithoutOverflow,
+        widthWithOverflow: root.clientWidth,
+      };
+      spacer.remove();
+      return result;
+    });
+    expect(scrollbarLayout.gutter).toContain('stable');
+    expect(scrollbarLayout.overflowed).toBe(true);
+    expect(scrollbarLayout.widthWithOverflow).toBe(scrollbarLayout.widthWithoutOverflow);
     await expect(page.getByRole('button', { name: '영역 측정', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '컬러 피커', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'CSS 변경 추출', exact: true })).toHaveCount(0);
@@ -169,15 +189,27 @@ test('Alt+Backquote unlock shortcut shows a temporary page status toast', async 
     const page = await context.newPage();
     await page.setContent('<p>Protected page text</p>');
     await page.evaluate(() => {
-      const testWindow = window as Window & { unlockListener?: (...args: unknown[]) => unknown };
+      const testWindow = window as Window & { unlockListener?: (...args: unknown[]) => unknown; interactionsUnlocked?: boolean };
+      testWindow.interactionsUnlocked = false;
       Object.defineProperty(window.chrome, 'runtime', { configurable: true, value: {
         onMessage: {
           addListener: (listener: (...args: unknown[]) => unknown) => { testWindow.unlockListener = listener; },
           removeListener: () => undefined,
         },
         sendMessage: (message: { type?: string }) => {
-          if (message.type === 'TOGGLE_PAGE_INTERACTION_UNLOCK') testWindow.unlockListener?.(message, {}, () => undefined);
-          return Promise.resolve({ ok: true });
+          if (message.type === 'GET_PAGE_INTERACTION_UNLOCK_STATE') {
+            return Promise.resolve({ ok: true, interactionsUnlocked: testWindow.interactionsUnlocked, toolActive: false });
+          }
+          if (message.type === 'TOGGLE_PAGE_INTERACTION_UNLOCK') {
+            testWindow.interactionsUnlocked = !testWindow.interactionsUnlocked;
+            testWindow.unlockListener?.({
+              type: 'SET_PAGE_INTERACTION_UNLOCK',
+              enabled: testWindow.interactionsUnlocked,
+              toolActive: false,
+              announce: true,
+            }, {}, () => undefined);
+          }
+          return Promise.resolve({ ok: true, interactionsUnlocked: testWindow.interactionsUnlocked, toolActive: false });
         },
       } });
       Object.defineProperty(window.chrome, 'storage', { configurable: true, value: { local: { get: () => Promise.resolve({}) } } });

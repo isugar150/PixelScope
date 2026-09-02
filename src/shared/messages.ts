@@ -4,6 +4,8 @@ import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureV
 export type ExtensionMessage =
   | { readonly type: 'GET_TOOL_STATE'; readonly tabId?: number }
   | { readonly type: 'TOGGLE_PAGE_INTERACTION_UNLOCK'; readonly tabId?: number }
+  | { readonly type: 'GET_PAGE_INTERACTION_UNLOCK_STATE' }
+  | { readonly type: 'SET_PAGE_INTERACTION_UNLOCK'; readonly enabled: boolean; readonly toolActive: boolean; readonly announce: boolean }
   | { readonly type: 'ACTIVATE_TOOL'; readonly tabId: number; readonly tool: ActiveTool }
   | { readonly type: 'DEACTIVATE_TOOL'; readonly tabId: number }
   | { readonly type: 'CAPTURE_VISIBLE_TAB' }
@@ -17,7 +19,7 @@ export type ExtensionMessage =
   | { readonly type: 'TOOL_STATE_CHANGED'; readonly tool: ToolMode };
 
 export type ExtensionResponse =
-  | { readonly ok: true; readonly tool?: ToolMode; readonly dataUrl?: string; readonly captureId?: string; readonly position?: CaptureScrollPosition; readonly captureProgress?: CaptureProgressState; readonly interactionsUnlocked?: boolean }
+  | { readonly ok: true; readonly tool?: ToolMode; readonly dataUrl?: string; readonly captureId?: string; readonly position?: CaptureScrollPosition; readonly captureProgress?: CaptureProgressState; readonly interactionsUnlocked?: boolean; readonly toolActive?: boolean }
   | { readonly ok: false; readonly error: string; readonly code?: 'file-access-required' };
 
 export function isExtensionMessage(value: unknown): value is ExtensionMessage {
@@ -27,6 +29,9 @@ export function isExtensionMessage(value: unknown): value is ExtensionMessage {
     case 'CAPTURE_VISIBLE_TAB':
     case 'CAPTURE_CANCEL': return true;
     case 'TOGGLE_PAGE_INTERACTION_UNLOCK': return !('tabId' in value) || hasTabId(value, 'tabId');
+    case 'GET_PAGE_INTERACTION_UNLOCK_STATE': return true;
+    case 'SET_PAGE_INTERACTION_UNLOCK':
+      return hasBoolean(value, 'enabled') && hasBoolean(value, 'toolActive') && hasBoolean(value, 'announce');
     case 'ACTIVATE_TOOL':
       return hasTabId(value, 'tabId') && 'tool' in value && isActiveTool(value.tool);
     case 'DEACTIVATE_TOOL': return hasTabId(value, 'tabId');
@@ -91,6 +96,10 @@ function hasNonNegativeInteger(value: object, key: string): boolean {
 
 function hasTabId(value: object, key: string): boolean {
   return hasNonNegativeInteger(value, key);
+}
+
+function hasBoolean(value: object, key: string): boolean {
+  return typeof Reflect.get(value, key) === 'boolean';
 }
 
 function hasNumberInRange(value: object, key: string, minimum: number, maximum: number): boolean {
