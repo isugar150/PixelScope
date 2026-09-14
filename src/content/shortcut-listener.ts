@@ -54,9 +54,9 @@ window.addEventListener('keydown', onKeyDown, { capture: true });
 chrome.runtime.onMessage.addListener(onMessage);
 
 try {
-  void chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse>({ type: 'GET_PAGE_INTERACTION_UNLOCK_STATE' })
+  void chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse | undefined>({ type: 'GET_PAGE_INTERACTION_UNLOCK_STATE' })
     .then((response) => {
-      if (!receivedExplicitState && response.ok) applyState(response.interactionsUnlocked === true, response.toolActive === true, false);
+      if (!receivedExplicitState && response?.ok === true) applyState(response.interactionsUnlocked === true, response.toolActive === true, false);
     })
     .catch(() => undefined);
 } catch { /* Extension context invalidated; reinjection installs a fresh runtime. */ }

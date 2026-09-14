@@ -17,6 +17,7 @@ function isRestrictedPageError(message: string): boolean {
 }
 
 const CONTENT_SCRIPT = 'content.js';
+const CONTENT_SCRIPT_UNAVAILABLE = '페이지에서 PixelScope가 응답하지 않습니다. 페이지를 새로고침한 뒤 다시 시도해주세요.';
 const SHORTCUT_SCRIPT = 'shortcut-listener.js';
 const UNLOCKED_ATTRIBUTE = 'data-pixelscope-interactions-unlocked';
 const TOOL_ACTIVE_ATTRIBUTE = 'data-pixelscope-tool-active';
@@ -131,7 +132,7 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       return { ok: true, captureId };
     }
     case 'DESIGN_OVERLAY_UPDATE':
-      return chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(message.tabId, message);
+      return await sendTabMessage(message.tabId, message);
     case 'CAPTURE_CANCEL':
       if (sender.tab?.id !== undefined) captureAbortControllers.get(sender.tab.id)?.abort();
       return { ok: true };
@@ -167,7 +168,7 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
     for (const [index, tile] of tiles.entries()) {
       throwIfAborted(abortController.signal);
       const suppressViewportFixed = shouldSuppressViewportFixed(preferredPosition, tile.position, firstPageRowY);
-      let scrollResponse = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, {
+      let scrollResponse = await sendTabMessage(tabId, {
         type: 'CAPTURE_SCROLL_TO',
         position: tile.position,
         suppressViewportFixed,
@@ -175,7 +176,7 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
       if (!scrollResponse.ok || scrollResponse.position === undefined) throw new Error(scrollResponse.ok ? '페이지 스크롤 위치를 확인할 수 없습니다.' : scrollResponse.error);
       if (index > 0) await delay(CAPTURE_INTERVAL_MS, abortController.signal);
       if (suppressViewportFixed) {
-        scrollResponse = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, {
+        scrollResponse = await sendTabMessage(tabId, {
           type: 'CAPTURE_SCROLL_TO',
           position: scrollResponse.position,
           suppressViewportFixed: true,
@@ -307,16 +308,32 @@ function sanitizeTitle(title: string): string {
   const value = title.trim().replace(/[\\/:*?"<>|]+/g, '-');
   return value.length === 0 ? 'PixelScope capture' : value.slice(0, 120);
 }
+/**
+ * shortcut-listener.js runs on every page, so a tab always has a runtime message listener even when
+ * content.js has never been injected. Unhandled messages then resolve with `undefined` instead of
+ * rejecting, so only a real content.js reply proves the tool runtime is loaded.
+ */
+async function hasContentScript(tabId: number): Promise<boolean> {
+  try { return (await sendTabMessage(tabId, { type: 'GET_TOOL_STATE' })).ok; }
+  catch { return false; }
+}
 async function ensureContentScript(tabId: number): Promise<void> {
-  try { await chrome.tabs.sendMessage(tabId, { type: 'GET_TOOL_STATE' } satisfies ExtensionMessage); }
-  catch {
-    try { await chrome.scripting.executeScript({ target: { tabId }, files: [CONTENT_SCRIPT] }); }
-    catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (isRestrictedPageError(message)) throw new FileAccessRequiredError();
-      throw error;
-    }
+  if (await hasContentScript(tabId)) return;
+  try { await chrome.scripting.executeScript({ target: { tabId }, files: [CONTENT_SCRIPT] }); }
+  catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isRestrictedPageError(message)) throw new FileAccessRequiredError();
+    throw error;
   }
+}
+
+/**
+ * Normalizes the `undefined` that chrome.tabs.sendMessage resolves with when no listener answers,
+ * so callers never read `.ok` off a missing response.
+ */
+async function sendTabMessage(tabId: number, message: ExtensionMessage): Promise<ExtensionResponse> {
+  const response = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse | undefined>(tabId, message);
+  return response ?? { ok: false, error: CONTENT_SCRIPT_UNAVAILABLE };
 }
 
 async function readPageInteractionState(tabId: number): Promise<PageInteractionState> {
@@ -346,7 +363,7 @@ async function injectInteractionRuntime(tabId: number): Promise<void> {
 }
 
 async function broadcastInteractionState(tabId: number, state: PageInteractionState, announce: boolean): Promise<void> {
-  await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, {
+  await sendTabMessage(tabId, {
     type: 'SET_PAGE_INTERACTION_UNLOCK',
     enabled: state.enabled,
     toolActive: state.toolActive,
@@ -372,13 +389,13 @@ async function restoreInteractionRuntimes(): Promise<void> {
 }
 
 async function sendToolCommand(tabId: number, tool: ToolMode): Promise<ToolMode> {
-  const response = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, { type: 'TOOL_COMMAND', tool });
+  const response = await sendTabMessage(tabId, { type: 'TOOL_COMMAND', tool });
   if (!response.ok) throw new Error(response.error);
   return response.tool ?? tool;
 }
 async function queryContentState(tabId: number): Promise<{ tool: ToolMode; captureProgress?: CaptureProgressState; interactionsUnlocked?: boolean }> {
   try {
-    const response = await chrome.tabs.sendMessage<ExtensionMessage, ExtensionResponse>(tabId, { type: 'GET_TOOL_STATE' });
+    const response = await sendTabMessage(tabId, { type: 'GET_TOOL_STATE' });
     return response.ok ? { tool: response.tool ?? 'idle', captureProgress: response.captureProgress, interactionsUnlocked: response.interactionsUnlocked } : { tool: 'idle' };
   } catch { return { tool: 'idle' }; }
 }

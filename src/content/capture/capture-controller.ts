@@ -186,9 +186,10 @@ export class CaptureController implements ToolLifecycle {
     this.#overlay?.setCaptureHidden(true);
     try {
       await nextPaint();
-      const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse>({
+      const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse | undefined>({
         type: 'CAPTURE_REGION', rect, screenshotViewport: { width: innerWidth, height: innerHeight }, title: document.title,
       });
+      if (response === undefined) throw new Error('캡처 요청에 대한 응답이 없습니다.');
       if (!response.ok) throw new Error(response.error);
       this.#capturing = false;
       this.#onExit();
@@ -239,11 +240,12 @@ export class CaptureController implements ToolLifecycle {
         ? await this.#warmFullPage(abortController.signal)
         : rect;
       this.#overlay?.updatePreparingSize(captureRect);
-      const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse>({
+      const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse | undefined>({
         type: 'CAPTURE_DOCUMENT', rect: captureRect, viewport: this.#targetClientSize(), screenshotViewport: { width: innerWidth, height: innerHeight },
         viewportOffset: this.#targetViewportOffset(), title,
         ...(this.#mode === 'element' ? { preferredPosition: this.#originalScroll } : {}),
       });
+      if (response === undefined) throw new Error('캡처 요청에 대한 응답이 없습니다.');
       if (!response.ok) throw new Error(response.error);
       this.#captureAbortController = null; this.#capturing = false; this.#restorePage(); this.#onExit();
     } catch (error: unknown) {

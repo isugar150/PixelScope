@@ -9,7 +9,8 @@ export interface CaptureManagerOptions {
 }
 
 export async function captureVisibleTab(): Promise<string> {
-  const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse>({ type: 'CAPTURE_VISIBLE_TAB' });
+  const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse | undefined>({ type: 'CAPTURE_VISIBLE_TAB' });
+  if (response === undefined) throw new Error('캡처 데이터가 없습니다.');
   if (!response.ok || response.dataUrl === undefined) throw new Error(response.ok ? '캡처 데이터가 없습니다.' : response.error);
   return response.dataUrl;
 }

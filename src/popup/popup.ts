@@ -239,7 +239,11 @@ async function sendDesignOverlayUpdate(includeImage: boolean): Promise<void> {
   });
 }
 async function send(message: ExtensionMessage): Promise<ExtensionResponse> {
-  try { return await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse>(message); }
+  try {
+    // sendMessage resolves with undefined when no listener answers, so never read .ok off it directly.
+    const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse | undefined>(message);
+    return response ?? { ok: false, error: '확장 프로그램이 응답하지 않습니다. 잠시 후 다시 시도해주세요.' };
+  }
   catch (error: unknown) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
 }
 function showError(message: string, code?: 'file-access-required'): void {
