@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCaptureTiles, intersectCaptureRect, shouldSuppressViewportFixed } from '../src/capture/tile-plan';
+import { createCaptureTiles, createFrameLayout, intersectCaptureRect, shouldSuppressViewportFixed } from '../src/capture/tile-plan';
 
 describe('capture tile planning', () => {
   it('covers a long page from top to bottom without gaps', () => {
@@ -55,5 +55,45 @@ describe('capture tile planning', () => {
       { x: 0, y: 500 },
     );
     expect(tiles.map((tile) => tile.position.y)).toEqual([500, 1_100, 1_400, 0]);
+  });
+
+  it('grows an app-shell scroller to its full content and stretches the sidebar column below it', () => {
+    const layout = createFrameLayout(
+      { width: 1500, height: 900 },
+      { left: 300, top: 0, width: 1185, height: 900 },
+      { width: 1185, height: 1400 },
+    );
+    expect(layout).toEqual({
+      width: 1500,
+      height: 1400,
+      contentOffset: { x: 300, y: 0 },
+      draws: [
+        { source: { left: 0, top: 0, width: 300, height: 900 }, destination: { left: 0, top: 0, width: 300, height: 900 } },
+        { source: { left: 0, top: 899, width: 300, height: 1 }, destination: { left: 0, top: 900, width: 300, height: 500 } },
+        { source: { left: 1485, top: 0, width: 15, height: 900 }, destination: { left: 1485, top: 0, width: 15, height: 900 } },
+        { source: { left: 1485, top: 899, width: 15, height: 1 }, destination: { left: 1485, top: 900, width: 15, height: 500 } },
+      ],
+    });
+  });
+
+  it('shifts regions after the scroller by the grown size and keeps corners unstretched', () => {
+    const layout = createFrameLayout(
+      { width: 400, height: 300 },
+      { left: 100, top: 50, width: 200, height: 200 },
+      { width: 260, height: 500 },
+    );
+    expect(layout.width).toBe(460);
+    expect(layout.height).toBe(600);
+    expect(layout.contentOffset).toEqual({ x: 100, y: 50 });
+    expect(layout.draws).toContainEqual({ source: { left: 300, top: 250, width: 100, height: 50 }, destination: { left: 360, top: 550, width: 100, height: 50 } });
+    expect(layout.draws).toContainEqual({ source: { left: 299, top: 0, width: 1, height: 50 }, destination: { left: 300, top: 0, width: 60, height: 50 } });
+    expect(layout.draws).toContainEqual({ source: { left: 100, top: 250, width: 200, height: 50 }, destination: { left: 100, top: 550, width: 200, height: 50 } });
+    const covered = layout.draws.reduce((sum, draw) => sum + draw.destination.width * draw.destination.height, 0);
+    expect(covered + 260 * 500).toBe(layout.width * layout.height);
+  });
+
+  it('clamps a scroller that extends past the viewport', () => {
+    const layout = createFrameLayout({ width: 400, height: 300 }, { left: -10, top: 0, width: 420, height: 300 }, { width: 400, height: 900 });
+    expect(layout).toMatchObject({ width: 400, height: 900, contentOffset: { x: 0, y: 0 }, draws: [] });
   });
 });

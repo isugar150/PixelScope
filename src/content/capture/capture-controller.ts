@@ -7,6 +7,7 @@ import { CaptureOverlay } from './capture-overlay';
 
 export type CaptureMode = 'element' | 'page';
 const FIXED_CAPTURE_ATTRIBUTE = 'data-pixelscope-capture-fixed';
+const SCROLLABLE_OVERFLOW = new Set(['auto', 'scroll', 'overlay']);
 
 interface SuppressedStyle {
   readonly visibility: string;
@@ -41,7 +42,12 @@ export class CaptureController implements ToolLifecycle {
   #progress: CaptureProgressState | null = null;
   #originalScroll: CaptureScrollPosition | null = null;
   #originalScrollBehavior = '';
-  #dialogTarget: HTMLElement | null = null;
+  /** Inner scroll container to tile through instead of the window; null means the document scrolls. */
+  #scrollTarget: HTMLElement | null = null;
+  /** Capture the scroll target's entire content (warming it first) rather than a fixed rect within it. */
+  #captureWholeTarget = false;
+  /** Composite the rest of the viewport around the grown scroll target (app-shell full-page capture). */
+  #frameCapture = false;
   readonly #suppressedElements = new Map<HTMLElement, SuppressedStyle>();
   readonly #viewportSnapshot = new Map<HTMLElement, DOMRect>();
   #viewportSnapshotPosition: CaptureScrollPosition | null = null;
@@ -60,7 +66,10 @@ export class CaptureController implements ToolLifecycle {
     this.#addListeners();
     if (this.#mode === 'page') queueMicrotask(() => {
       if (!this.#active) return;
-      this.#dialogTarget = findScrollableOverlay();
+      const scroller = isPageScrollable() ? null : findPageScroller();
+      this.#scrollTarget = scroller;
+      this.#captureWholeTarget = true;
+      this.#frameCapture = scroller !== null && findViewportAttachedRoot(scroller) === null;
       void this.#capture(this.#targetRect(), document.title);
     });
   }
@@ -201,18 +210,35 @@ export class CaptureController implements ToolLifecycle {
     }
   }
 
+  /**
+   * A scroll container is captured with its whole scrolled content. Any other element is captured at
+   * its full border box, scrolling whichever container clips it (an app-shell main, a modal body)
+   * rather than assuming the document itself scrolls.
+   */
   #captureElement(element: Element): void {
-    const scrollableOverlay = findScrollableOverlay(element);
-    if (scrollableOverlay !== null) {
-      this.#dialogTarget = scrollableOverlay;
-      this.#captureTarget = scrollableOverlay;
-      void this.#capture(this.#targetRect(), `${document.title} - ${scrollableOverlay.tagName.toLowerCase()}`);
+    this.#captureTarget = element;
+    const title = `${document.title} - ${element.tagName.toLowerCase()}`;
+    if (element instanceof HTMLElement && isScrollContainer(element)) {
+      this.#scrollTarget = element;
+      this.#captureWholeTarget = true;
+      void this.#capture(this.#targetRect(), title);
       return;
     }
-    this.#captureTarget = element;
+    this.#scrollTarget = findClippingScroller(element);
+    void this.#capture(this.#elementRect(element), title);
+  }
+  #elementRect(element: Element): CaptureRect {
     const source = element.getBoundingClientRect();
-    const rect = { left: source.left + scrollX, top: source.top + scrollY, width: source.width, height: source.height };
-    void this.#capture(rect, `${document.title} - ${element.tagName.toLowerCase()}`);
+    if (this.#scrollTarget === null) return { left: source.left + scrollX, top: source.top + scrollY, width: source.width, height: source.height };
+    const origin = clientOrigin(this.#scrollTarget);
+    const content = this.#targetRect();
+    const offsetX = this.#scrollTarget.scrollLeft - origin.x;
+    const offsetY = this.#scrollTarget.scrollTop - origin.y;
+    const left = Math.max(0, source.left + offsetX);
+    const top = Math.max(0, source.top + offsetY);
+    const right = Math.min(content.width, source.right + offsetX);
+    const bottom = Math.min(content.height, source.bottom + offsetY);
+    return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
   }
   #elementAt(point: { readonly x: number; readonly y: number }): Element | null {
     return findInspectableElement(document.elementFromPoint(point.x, point.y), this.#overlay?.host ?? null);
@@ -236,14 +262,13 @@ export class CaptureController implements ToolLifecycle {
     try {
       if (this.#mode === 'element') await waitForPageFocus(abortController.signal);
       await waitForFonts(abortController.signal);
-      const captureRect = this.#mode === 'page' || this.#dialogTarget !== null
-        ? await this.#warmFullPage(abortController.signal)
-        : rect;
+      const captureRect = this.#captureWholeTarget ? await this.#warmFullPage(abortController.signal) : rect;
       this.#overlay?.updatePreparingSize(captureRect);
       const response = await chrome.runtime.sendMessage<ExtensionMessage, ExtensionResponse | undefined>({
         type: 'CAPTURE_DOCUMENT', rect: captureRect, viewport: this.#targetClientSize(), screenshotViewport: { width: innerWidth, height: innerHeight },
         viewportOffset: this.#targetViewportOffset(), title,
         ...(this.#mode === 'element' ? { preferredPosition: this.#originalScroll } : {}),
+        ...(this.#frameCapture ? { frame: true } : {}),
       });
       if (response === undefined) throw new Error('캡처 요청에 대한 응답이 없습니다.');
       if (!response.ok) throw new Error(response.error);
@@ -296,32 +321,30 @@ export class CaptureController implements ToolLifecycle {
     document.documentElement.style.scrollBehavior = this.#originalScrollBehavior;
     if (this.#originalScroll !== null) this.#targetScrollTo(this.#originalScroll);
     this.#originalScroll = null;
-    this.#dialogTarget = null;
+    this.#scrollTarget = null; this.#captureWholeTarget = false; this.#frameCapture = false;
     this.#overlay?.setCaptureHidden(false);
   }
   #targetRect(): CaptureRect {
-    return this.#dialogTarget === null ? pageRect() : {
+    return this.#scrollTarget === null ? pageRect() : {
       left: 0, top: 0,
-      width: Math.max(this.#dialogTarget.scrollWidth, this.#dialogTarget.clientWidth),
-      height: Math.max(this.#dialogTarget.scrollHeight, this.#dialogTarget.clientHeight),
+      width: Math.max(this.#scrollTarget.scrollWidth, this.#scrollTarget.clientWidth),
+      height: Math.max(this.#scrollTarget.scrollHeight, this.#scrollTarget.clientHeight),
     };
   }
   #targetClientSize(): { readonly width: number; readonly height: number } {
-    return this.#dialogTarget === null
+    return this.#scrollTarget === null
       ? { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight }
-      : { width: this.#dialogTarget.clientWidth, height: this.#dialogTarget.clientHeight };
+      : { width: this.#scrollTarget.clientWidth, height: this.#scrollTarget.clientHeight };
   }
   #targetPosition(): CaptureScrollPosition {
-    return this.#dialogTarget === null ? { x: window.scrollX, y: window.scrollY } : { x: this.#dialogTarget.scrollLeft, y: this.#dialogTarget.scrollTop };
+    return this.#scrollTarget === null ? { x: window.scrollX, y: window.scrollY } : { x: this.#scrollTarget.scrollLeft, y: this.#scrollTarget.scrollTop };
   }
   #targetScrollTo(position: CaptureScrollPosition): void {
-    if (this.#dialogTarget === null) window.scrollTo(position.x, position.y);
-    else this.#dialogTarget.scrollTo(position.x, position.y);
+    if (this.#scrollTarget === null) window.scrollTo(position.x, position.y);
+    else this.#scrollTarget.scrollTo(position.x, position.y);
   }
   #targetViewportOffset(): CaptureScrollPosition {
-    if (this.#dialogTarget === null) return { x: 0, y: 0 };
-    const bounds = this.#dialogTarget.getBoundingClientRect();
-    return { x: bounds.left, y: bounds.top };
+    return this.#scrollTarget === null ? { x: 0, y: 0 } : clientOrigin(this.#scrollTarget);
   }
   #preparePageForCapture(): void {
     this.#captureStyle?.remove();
@@ -354,15 +377,15 @@ export class CaptureController implements ToolLifecycle {
     const snapshotMoved = this.#viewportSnapshotPosition !== null
       && (Math.abs(currentPosition.x - this.#viewportSnapshotPosition.x) > 1
         || Math.abs(currentPosition.y - this.#viewportSnapshotPosition.y) > 1);
-    const elements = this.#dialogTarget === null
-      ? capturePageElements()
-      : captureOverlayElements(this.#dialogTarget);
-    for (const element of elements) {
+    const scrollTarget = this.#scrollTarget;
+    const captureTarget = this.#captureTarget;
+    for (const element of this.#captureCandidates()) {
       if (element.hasAttribute('data-pixelscope-overlay') || this.#suppressedElements.has(element)
         || element.closest(`[${FIXED_CAPTURE_ATTRIBUTE}]`) !== null) continue;
-      if (this.#dialogTarget !== null && (element === this.#dialogTarget || element.contains(this.#dialogTarget))) continue;
-      if (this.#dialogTarget === null && this.#captureTarget !== null
-        && (element === this.#captureTarget || element.contains(this.#captureTarget) || this.#captureTarget.contains(element))) continue;
+      if (scrollTarget !== null && (element === scrollTarget || element.contains(scrollTarget))) continue;
+      // A captured element keeps its own content, but sticky parts of a captured scroller still tile once.
+      if (captureTarget !== null && captureTarget !== scrollTarget
+        && (element === captureTarget || element.contains(captureTarget) || captureTarget.contains(element))) continue;
       if (!isViewportAttached(element, snapshotMoved ? this.#viewportSnapshot.get(element) : undefined)) continue;
       this.#suppressedElements.set(element, {
         visibility: element.style.getPropertyValue('visibility'),
@@ -375,15 +398,21 @@ export class CaptureController implements ToolLifecycle {
   #snapshotViewportElements(): void {
     this.#viewportSnapshot.clear();
     this.#viewportSnapshotPosition = this.#targetPosition();
-    const elements = this.#dialogTarget === null
-      ? capturePageElements()
-      : captureOverlayElements(this.#dialogTarget);
-    for (const element of elements) {
+    const scrollTarget = this.#scrollTarget;
+    for (const element of this.#captureCandidates()) {
       if (element.hasAttribute('data-pixelscope-overlay')) continue;
-      if (this.#dialogTarget !== null && (element === this.#dialogTarget || element.contains(this.#dialogTarget))) continue;
+      if (scrollTarget !== null && (element === scrollTarget || element.contains(scrollTarget))) continue;
       const rect = element.getBoundingClientRect();
       if (intersectsViewport(rect)) this.#viewportSnapshot.set(element, rect);
     }
+  }
+  /**
+   * Elements that may need hiding on later tiles. Inside a fixed overlay only that overlay matters;
+   * an app-shell scroller can be covered by fixed page chrome, so the whole page is considered.
+   */
+  #captureCandidates(): HTMLElement[] {
+    const root = this.#scrollTarget === null ? null : findViewportAttachedRoot(this.#scrollTarget);
+    return captureElements(root ?? document.body);
   }
   #addListeners(): void {
     window.addEventListener('pointerdown', this.#onPointerDown, { capture: true, passive: false });
@@ -404,32 +433,56 @@ export class CaptureController implements ToolLifecycle {
 }
 
 /**
- * When the page itself can't scroll (typical of a modal dialog that locks body scroll), full-page
- * capture would otherwise scroll nothing and produce duplicate tiles. This looks for the dialog's
- * own scrollable container so capture can scroll and tile through it instead.
+ * When the document itself can't scroll (an app shell with a locked root, or a modal that locks body
+ * scroll), full-page capture would otherwise scroll nothing and produce a single viewport. Pick the
+ * largest visible container that actually scrolls vertically and tile through it instead.
  */
-function findScrollableOverlay(relatedElement?: Element): HTMLElement | null {
-  if (isPageScrollable()) return null;
+function findPageScroller(): HTMLElement | null {
   const viewportArea = innerWidth * innerHeight;
   let best: HTMLElement | null = null;
   let bestArea = 0;
   for (const element of document.body.querySelectorAll<HTMLElement>('*')) {
     if (element.hasAttribute('data-pixelscope-overlay')) continue;
-    if (relatedElement !== undefined && !element.contains(relatedElement) && !relatedElement.contains(element)) continue;
     if (element.scrollHeight <= element.clientHeight + 2) continue;
-    const style = getComputedStyle(element);
-    if (!['auto', 'scroll', 'overlay'].includes(style.overflowY)) continue;
-    if (!hasViewportAttachedAncestor(element)) continue;
+    if (!SCROLLABLE_OVERFLOW.has(getComputedStyle(element).overflowY)) continue;
     const rect = element.getBoundingClientRect();
-    const area = Math.max(0, rect.width) * Math.max(0, rect.height);
+    const left = Math.max(rect.left, 0);
+    const top = Math.max(rect.top, 0);
+    const width = Math.min(rect.right, innerWidth) - left;
+    const height = Math.min(rect.bottom, innerHeight) - top;
+    const area = Math.max(0, width) * Math.max(0, height);
     if (area < viewportArea * 0.3 || area <= bestArea) continue;
+    // A scroller hidden behind a modal backdrop is not what the user is looking at.
+    const hit = document.elementFromPoint(left + width / 2, top + height / 2);
+    if (hit === null || !element.contains(hit)) continue;
     bestArea = area; best = element;
   }
   return best;
 }
 
-function hasViewportAttachedAncestor(element: HTMLElement): boolean {
-  return findViewportAttachedRoot(element) !== null;
+function isScrollContainer(element: HTMLElement): boolean {
+  if (element === document.documentElement || element === document.scrollingElement) return false;
+  const style = getComputedStyle(element);
+  return (SCROLLABLE_OVERFLOW.has(style.overflowY) && element.scrollHeight > element.clientHeight + 2)
+    || (SCROLLABLE_OVERFLOW.has(style.overflowX) && element.scrollWidth > element.clientWidth + 2);
+}
+
+/** The nearest scroll container that hides part of the element, so capture can scroll it into view. */
+function findClippingScroller(element: Element): HTMLElement | null {
+  const bounds = element.getBoundingClientRect();
+  for (let current = element.parentElement; current !== null && current !== document.documentElement; current = current.parentElement) {
+    if (!isScrollContainer(current)) continue;
+    const origin = clientOrigin(current);
+    if (bounds.left < origin.x - 1 || bounds.top < origin.y - 1
+      || bounds.right > origin.x + current.clientWidth + 1 || bounds.bottom > origin.y + current.clientHeight + 1) return current;
+  }
+  return null;
+}
+
+/** Viewport position of the element's scrollport, inside its borders. */
+function clientOrigin(element: HTMLElement): CaptureScrollPosition {
+  const bounds = element.getBoundingClientRect();
+  return { x: bounds.left + element.clientLeft, y: bounds.top + element.clientTop };
 }
 
 function findViewportAttachedRoot(element: HTMLElement): HTMLElement | null {
@@ -517,14 +570,6 @@ function isViewportAttached(element: HTMLElement, previousRect?: DOMRect): boole
 function intersectsViewport(rect: DOMRect): boolean {
   return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
 }
-function capturePageElements(): HTMLElement[] {
-  return captureElements(document.body);
-}
-
-function captureOverlayElements(scrollTarget: HTMLElement): HTMLElement[] {
-  return captureElements(findViewportAttachedRoot(scrollTarget) ?? scrollTarget);
-}
-
 function captureElements(root: ParentNode): HTMLElement[] {
   const elements: HTMLElement[] = [];
   const visit = (root: ParentNode): void => {

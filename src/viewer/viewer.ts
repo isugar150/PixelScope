@@ -381,7 +381,7 @@ function downloadCapture(): void {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (!cropMode) return;
+  if (handleShortcut(event) || !cropMode) return;
   if (event.key === 'Escape') {
     event.preventDefault();
     cancelCrop(true);
@@ -397,6 +397,24 @@ function handleKeydown(event: KeyboardEvent): void {
           : { x: 0, y: distance };
     setCropRect(adjustCropRect(cropRect, 'move', delta, imageBounds()), true);
   }
+}
+
+/**
+ * Ctrl/⌘+C copies and Ctrl/⌘+S saves the current image, mirroring the toolbar buttons (and their
+ * disabled state during crop). `code` keeps the shortcuts working under a Korean IME, and native
+ * copy wins while an input has focus or text is selected.
+ */
+function handleShortcut(event: KeyboardEvent): boolean {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return false;
+  if (event.code === 'KeyS') {
+    event.preventDefault();
+    if (!event.repeat && !downloadButton.disabled) downloadCapture();
+    return true;
+  }
+  if (event.code !== 'KeyC' || event.target instanceof HTMLInputElement || (getSelection()?.toString() ?? '') !== '') return false;
+  event.preventDefault();
+  if (!event.repeat && !copyButton.disabled) void copyCapture();
+  return true;
 }
 
 function isArrowKey(value: string): value is 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown' {

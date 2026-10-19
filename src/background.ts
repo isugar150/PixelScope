@@ -1,5 +1,5 @@
 import { deleteCapture, deleteExpiredCaptures, saveCapture } from './capture/capture-store';
-import { createCaptureTiles, intersectCaptureRect, shouldSuppressViewportFixed } from './capture/tile-plan';
+import { createCaptureTiles, createFrameLayout, intersectCaptureRect, shouldSuppressViewportFixed, type CaptureFrameLayout } from './capture/tile-plan';
 import { isExtensionMessage, type ExtensionMessage, type ExtensionResponse } from './shared/messages';
 import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './shared/capture';
 import type { ToolMode } from './shared/tool-state';
@@ -123,7 +123,7 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
     }
     case 'CAPTURE_DOCUMENT': {
       if (sender.tab?.id === undefined) return { ok: false, error: '캡처할 탭을 확인할 수 없습니다.' };
-      const captureId = await captureDocument(sender.tab.id, sender.tab.windowId, message.rect, message.viewport, message.screenshotViewport, message.viewportOffset, message.title, message.preferredPosition);
+      const captureId = await captureDocument(sender.tab.id, sender.tab.windowId, message.rect, message.viewport, message.screenshotViewport, message.viewportOffset, message.title, message.preferredPosition, message.frame === true);
       return { ok: true, captureId };
     }
     case 'CAPTURE_REGION': {
@@ -151,13 +151,16 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
   }
 }
 
-async function captureDocument(tabId: number, windowId: number, rect: CaptureRect, viewport: CaptureViewportSize, screenshotViewport: CaptureViewportSize, viewportOffset: CaptureScrollPosition, title: string, preferredPosition?: CaptureScrollPosition): Promise<string> {
+async function captureDocument(tabId: number, windowId: number, rect: CaptureRect, viewport: CaptureViewportSize, screenshotViewport: CaptureViewportSize, viewportOffset: CaptureScrollPosition, title: string, preferredPosition?: CaptureScrollPosition, frame = false): Promise<string> {
   captureAbortControllers.get(tabId)?.abort();
   const abortController = new AbortController();
   captureAbortControllers.set(tabId, abortController);
   const tiles = createCaptureTiles(rect, viewport, preferredPosition);
   if (tiles.length === 0) throw new Error('캡처할 영역의 크기가 올바르지 않습니다.');
   captureProgressStates.set(tabId, { phase: 'capturing', completed: 0, total: tiles.length });
+  const frameLayout = frame
+    ? createFrameLayout(screenshotViewport, { left: viewportOffset.x, top: viewportOffset.y, width: viewport.width, height: viewport.height }, rect)
+    : null;
 
   let canvas: OffscreenCanvas | null = null;
   let context: OffscreenCanvasRenderingContext2D | null = null;
@@ -190,15 +193,16 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
         if (canvas === null) {
           scaleX = bitmap.width / screenshotViewport.width;
           scaleY = bitmap.height / screenshotViewport.height;
-          const outputWidth = Math.ceil(rect.width * scaleX);
-          const outputHeight = Math.ceil(rect.height * scaleY);
+          const outputWidth = Math.ceil((frameLayout?.width ?? rect.width) * scaleX);
+          const outputHeight = Math.ceil((frameLayout?.height ?? rect.height) * scaleY);
           assertCanvasSize(outputWidth, outputHeight);
           canvas = new OffscreenCanvas(outputWidth, outputHeight);
           context = canvas.getContext('2d');
           if (context === null) throw new Error('캡처 이미지를 합성할 수 없습니다.');
+          if (frameLayout !== null) drawFrame(context, bitmap, frameLayout, scaleX, scaleY);
         }
         if (context === null) throw new Error('캡처 이미지를 합성할 수 없습니다.');
-        drawTile(context, bitmap, rect, viewport, scrollResponse.position, viewportOffset, scaleX, scaleY);
+        drawTile(context, bitmap, rect, viewport, scrollResponse.position, viewportOffset, frameLayout?.contentOffset ?? { x: 0, y: 0 }, scaleX, scaleY);
       } finally { bitmap.close(); }
       void chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_PROGRESS', completed: index + 1, total: tiles.length } satisfies ExtensionMessage).catch(() => undefined);
       captureProgressStates.set(tabId, { phase: 'capturing', completed: index + 1, total: tiles.length });
@@ -254,15 +258,25 @@ async function assertCaptureTabActive(tabId: number, windowId: number): Promise<
   if (!tab.active || tab.windowId !== windowId) throw new Error('캡처 중에는 원본 탭을 다른 탭으로 전환하지 마세요.');
 }
 
-function drawTile(context: OffscreenCanvasRenderingContext2D, bitmap: ImageBitmap, target: CaptureRect, viewport: CaptureViewportSize, position: CaptureScrollPosition, viewportOffset: CaptureScrollPosition, scaleX: number, scaleY: number): void {
+function drawFrame(context: OffscreenCanvasRenderingContext2D, bitmap: ImageBitmap, layout: CaptureFrameLayout, scaleX: number, scaleY: number): void {
+  for (const { source, destination } of layout.draws) {
+    context.drawImage(
+      bitmap,
+      source.left * scaleX, source.top * scaleY, source.width * scaleX, source.height * scaleY,
+      destination.left * scaleX, destination.top * scaleY, destination.width * scaleX, destination.height * scaleY,
+    );
+  }
+}
+
+function drawTile(context: OffscreenCanvasRenderingContext2D, bitmap: ImageBitmap, target: CaptureRect, viewport: CaptureViewportSize, position: CaptureScrollPosition, viewportOffset: CaptureScrollPosition, destinationOffset: CaptureScrollPosition, scaleX: number, scaleY: number): void {
   const intersection = intersectCaptureRect(target, position, viewport);
   if (intersection === null) return;
   const sourceX = (intersection.left - position.x + viewportOffset.x) * scaleX;
   const sourceY = (intersection.top - position.y + viewportOffset.y) * scaleY;
   const sourceWidth = intersection.width * scaleX;
   const sourceHeight = intersection.height * scaleY;
-  const destinationX = (intersection.left - target.left) * scaleX;
-  const destinationY = (intersection.top - target.top) * scaleY;
+  const destinationX = (intersection.left - target.left + destinationOffset.x) * scaleX;
+  const destinationY = (intersection.top - target.top + destinationOffset.y) * scaleY;
   context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, destinationX, destinationY, sourceWidth, sourceHeight);
 }
 

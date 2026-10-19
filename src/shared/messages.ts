@@ -9,7 +9,7 @@ export type ExtensionMessage =
   | { readonly type: 'ACTIVATE_TOOL'; readonly tabId: number; readonly tool: ActiveTool }
   | { readonly type: 'DEACTIVATE_TOOL'; readonly tabId: number }
   | { readonly type: 'CAPTURE_VISIBLE_TAB' }
-  | { readonly type: 'CAPTURE_DOCUMENT'; readonly rect: CaptureRect; readonly viewport: CaptureViewportSize; readonly screenshotViewport: CaptureViewportSize; readonly viewportOffset: CaptureScrollPosition; readonly title: string; readonly preferredPosition?: CaptureScrollPosition }
+  | { readonly type: 'CAPTURE_DOCUMENT'; readonly rect: CaptureRect; readonly viewport: CaptureViewportSize; readonly screenshotViewport: CaptureViewportSize; readonly viewportOffset: CaptureScrollPosition; readonly title: string; readonly preferredPosition?: CaptureScrollPosition; readonly frame?: boolean }
   | { readonly type: 'CAPTURE_REGION'; readonly rect: CaptureRect; readonly screenshotViewport: CaptureViewportSize; readonly title: string }
   | { readonly type: 'DESIGN_OVERLAY_UPDATE'; readonly tabId: number; readonly opacity: number; readonly blendMode: DesignOverlayBlendMode; readonly scale: DesignOverlayScale; readonly imageDataUrl?: string }
   | { readonly type: 'CAPTURE_SCROLL_TO'; readonly position: CaptureScrollPosition; readonly suppressViewportFixed: boolean }
@@ -41,7 +41,8 @@ export function isExtensionMessage(value: unknown): value is ExtensionMessage {
     case 'CAPTURE_DOCUMENT':
       return hasCaptureRect(value, 'rect') && hasSize(value, 'viewport') && hasSize(value, 'screenshotViewport') && hasPoint(value, 'viewportOffset')
         && 'title' in value && typeof value.title === 'string'
-        && (!('preferredPosition' in value) || hasPoint(value, 'preferredPosition'));
+        && (!('preferredPosition' in value) || hasPoint(value, 'preferredPosition'))
+        && (!('frame' in value) || hasBoolean(value, 'frame'));
     case 'CAPTURE_REGION':
       return hasCaptureRect(value, 'rect') && hasSize(value, 'screenshotViewport') && 'title' in value && typeof value.title === 'string';
     case 'DESIGN_OVERLAY_UPDATE':

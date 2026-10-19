@@ -61,3 +61,56 @@ function axisPositions(start: number, end: number, viewportLength: number, prefe
   }
   return positions;
 }
+
+export interface CaptureDraw {
+  readonly source: CaptureRect;
+  readonly destination: CaptureRect;
+}
+
+export interface CaptureFrameLayout {
+  readonly width: number;
+  readonly height: number;
+  /** Where the scroll container's content origin lands in the output image. */
+  readonly contentOffset: CaptureScrollPosition;
+  /** Static surroundings copied once from the first tile; the scroller's own box is left for the tiles. */
+  readonly draws: readonly CaptureDraw[];
+}
+
+/**
+ * App-shell pages lock the document and scroll an inner container instead, so a "full page" image
+ * is the visible viewport with that container grown to its full content. Everything around the
+ * container keeps its size; regions beside it are extended by stretching their trailing 1px edge so
+ * the grown area never shows transparent gaps.
+ */
+export function createFrameLayout(viewport: CaptureViewportSize, scroller: CaptureRect, content: CaptureViewportSize): CaptureFrameLayout {
+  const left = clamp(scroller.left, 0, viewport.width);
+  const top = clamp(scroller.top, 0, viewport.height);
+  const right = clamp(scroller.left + scroller.width, left, viewport.width);
+  const bottom = clamp(scroller.top + scroller.height, top, viewport.height);
+  const extraX = Math.max(0, content.width - (right - left));
+  const extraY = Math.max(0, content.height - (bottom - top));
+  const columns = [[0, left], [left, right], [right, viewport.width]] as const;
+  const rows = [[0, top], [top, bottom], [bottom, viewport.height]] as const;
+  const draws: CaptureDraw[] = [];
+  for (const [rowIndex, [y0, y1]] of rows.entries()) {
+    for (const [columnIndex, [x0, x1]] of columns.entries()) {
+      const width = x1 - x0;
+      const height = y1 - y0;
+      if ((rowIndex === 1 && columnIndex === 1) || width <= 0 || height <= 0) continue;
+      const x = x0 + (columnIndex === 2 ? extraX : 0);
+      const y = y0 + (rowIndex === 2 ? extraY : 0);
+      draws.push({ source: { left: x0, top: y0, width, height }, destination: { left: x, top: y, width, height } });
+      if (columnIndex === 1 && extraX > 0) {
+        draws.push({ source: { left: x1 - 1, top: y0, width: 1, height }, destination: { left: x + width, top: y, width: extraX, height } });
+      }
+      if (rowIndex === 1 && extraY > 0) {
+        draws.push({ source: { left: x0, top: y1 - 1, width, height: 1 }, destination: { left: x, top: y + height, width, height: extraY } });
+      }
+    }
+  }
+  return { width: viewport.width + extraX, height: viewport.height + extraY, contentOffset: { x: left, y: top }, draws };
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
