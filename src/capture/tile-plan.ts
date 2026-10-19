@@ -62,6 +62,16 @@ function axisPositions(start: number, end: number, viewportLength: number, prefe
   return positions;
 }
 
+/**
+ * Chrome refuses canvases past 32,767px on a side or ~268M pixels, which a long blog post at a
+ * high device pixel ratio easily exceeds. Rather than failing, shrink the output uniformly to the
+ * largest size that fits.
+ */
+export function fitCanvasScale(width: number, height: number, maxDimension = 32_767, maxPixels = 268_000_000): number {
+  if (width <= 0 || height <= 0) return 1;
+  return Math.min(1, maxDimension / width, maxDimension / height, Math.sqrt(maxPixels / (width * height)));
+}
+
 export interface CaptureDraw {
   readonly source: CaptureRect;
   readonly destination: CaptureRect;

@@ -201,3 +201,125 @@ test('full-page capture scrolls a full-window same-origin iframe document', asyn
     expectColor(await capture.pixel(400 * scale, 1_450 * scale), GREEN);
   } finally { await context.close(); }
 });
+
+/** Shared 1500px post: 300px red, 1000px blue card with a 100px yellow bottom border, 200px green. */
+const POST_STYLE = `#head { height: 300px; background: rgb(255, 0, 0); }
+  #card { height: 900px; background: rgb(0, 0, 255); border-bottom: 100px solid rgb(255, 255, 0); }
+  #tail { height: 200px; background: rgb(0, 128, 0); }`;
+const POST_BODY = '<div id="head"></div><div id="card"></div><div id="tail"></div>';
+
+async function openPages(context: BrowserContext, pages: Readonly<Record<string, string>>): Promise<Page> {
+  const page = await context.newPage();
+  await page.route('**/*', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: pages[new URL(route.request().url()).pathname] ?? pages['/'] ?? '',
+  }));
+  await page.goto(PAGE_URL);
+  return page;
+}
+
+async function expectFullPost(capture: CaptureResult, cssWidth: number, x: number): Promise<void> {
+  const scale = capture.width / cssWidth;
+  expect(capture.height).toBe(Math.ceil(1_500 * scale));
+  expectColor(await capture.pixel(x * scale, 100 * scale), RED);
+  expectColor(await capture.pixel(x * scale, 700 * scale), BLUE);
+  expectColor(await capture.pixel(x * scale, 1_250 * scale), YELLOW);
+  expectColor(await capture.pixel(x * scale, 1_450 * scale), GREEN);
+}
+
+test('full-page capture scrolls <body> when the root is locked and the body is the scroller', async () => {
+  const { context, worker, extensionId } = await launch();
+  try {
+    const page = await openPages(context, { '/': `<!doctype html><title>body scroller</title><style>
+      html { height: 100%; overflow: hidden; } body { margin: 0; height: 100%; overflow: auto; } ${POST_STYLE}
+    </style>${POST_BODY}` });
+    await activate(context, worker, extensionId, page, 'capture-page');
+    await expectFullPost(await readCapture(context), 800, 400);
+  } finally { await context.close(); }
+});
+
+test('full-page capture finds a scroller inside an open shadow root', async () => {
+  const { context, worker, extensionId } = await launch();
+  try {
+    const page = await openPages(context, { '/': `<!doctype html><title>shadow scroller</title><style>
+      html, body { margin: 0; height: 100%; overflow: hidden; } app-root { display: block; height: 100%; }
+    </style><app-root><template shadowrootmode="open"><style>
+      .scroll { height: 100%; overflow: auto; } ${POST_STYLE}
+    </style><div class="scroll">${POST_BODY}</div></template></app-root>` });
+    await activate(context, worker, extensionId, page, 'capture-page');
+    await expectFullPost(await readCapture(context), 800, 400);
+  } finally { await context.close(); }
+});
+
+test('element capture selects an element inside an open shadow root instead of its host', async () => {
+  const { context, worker, extensionId } = await launch();
+  try {
+    const page = await openPages(context, { '/': `<!doctype html><title>shadow element</title><style>
+      body { margin: 0; } #host { display: block; width: 600px; height: 400px; background: rgb(128, 128, 128); }
+    </style><div id="host"><template shadowrootmode="open"><style>
+      #inner { width: 200px; height: 150px; margin: 50px; background: rgb(255, 0, 0); border-top: 30px solid rgb(0, 0, 255); }
+    </style><div id="inner"></div></template></div>` });
+    await activate(context, worker, extensionId, page, 'capture-element');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveCount(1);
+    await page.mouse.move(150, 160);
+    await page.mouse.down();
+    await page.mouse.up();
+    const capture = await readCapture(context);
+    const scale = capture.width / 200;
+    expect(capture.height).toBe(Math.ceil(180 * scale));
+    expectColor(await capture.pixel(100 * scale, 10 * scale), BLUE);
+    expectColor(await capture.pixel(100 * scale, 120 * scale), RED);
+  } finally { await context.close(); }
+});
+
+test('full-page capture finds an app-shell scroller inside a same-origin iframe', async () => {
+  const { context, worker, extensionId } = await launch();
+  try {
+    const page = await openPages(context, { '/': FRAME_HOST, '/post.html': APP_SHELL });
+    await expect(page.frameLocator('#mainFrame').locator('#card')).toBeVisible();
+    await activate(context, worker, extensionId, page, 'capture-page');
+    const capture = await readCapture(context);
+    await expectFullPost(capture, 800, 400);
+    // The gray sidebar beside the frame's scroller is kept and extended down the grown image.
+    const scale = capture.width / 800;
+    expectColor(await capture.pixel(100 * scale, 1_450 * scale), GRAY);
+  } finally { await context.close(); }
+});
+
+test('element capture brings a scroll box that straddles the fold into view before tiling it', async () => {
+  const { context, worker, extensionId } = await launch();
+  try {
+    // The horizontally scrolling box spans y 400–800 in a 600px viewport, so its bottom starts hidden.
+    const page = await openPages(context, { '/': `<!doctype html><title>fold</title><style>
+      body { margin: 0; } #spacer { height: 400px; } #box { height: 400px; overflow-x: auto; overflow-y: hidden; }
+      #wide { width: 1600px; height: 385px; background: linear-gradient(to bottom, rgb(255, 0, 0) 0 300px, rgb(255, 255, 0) 300px 385px); }
+      #after { height: 2000px; }
+    </style><div id="spacer"></div><div id="box"><div id="wide"></div></div><div id="after"></div>` });
+    await activate(context, worker, extensionId, page, 'capture-element');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveCount(1);
+    await page.mouse.move(400, 500);
+    await page.mouse.down();
+    await page.mouse.up();
+    const capture = await readCapture(context);
+    const scale = capture.width / 1_600;
+    expect(capture.height).toBe(Math.ceil(385 * scale));
+    expectColor(await capture.pixel(100 * scale, 100 * scale), RED);
+    expectColor(await capture.pixel(100 * scale, 350 * scale), YELLOW);
+    expectColor(await capture.pixel(1_500 * scale, 350 * scale), YELLOW);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  } finally { await context.close(); }
+});
+
+test('full-page capture tiles the scrolling body of a modal <dialog>', async () => {
+  const { context, worker, extensionId } = await launch();
+  try {
+    const page = await openPages(context, { '/': `<!doctype html><title>dialog</title><style>
+      body { margin: 0; } dialog { width: 600px; height: 450px; padding: 0; border: 0; }
+      .scroll { height: 100%; overflow: auto; } ${POST_STYLE}
+    </style><p>behind</p><dialog><div class="scroll">${POST_BODY}</div></dialog>
+    <script>document.querySelector('dialog').showModal();</script>` });
+    const scrollWidth = await page.locator('dialog .scroll').evaluate((element) => element.clientWidth);
+    await activate(context, worker, extensionId, page, 'capture-page');
+    await expectFullPost(await readCapture(context), scrollWidth, 100);
+  } finally { await context.close(); }
+});

@@ -1,12 +1,12 @@
 import type { ExtensionMessage, ExtensionResponse } from '../../shared/messages';
 import type { CaptureProgressState, CaptureRect, CaptureScrollPosition } from '../../shared/capture';
 import type { ToolLifecycle } from '../tool-controller';
-import { calculateAutoScroll, rectangleFromPoints, type Point } from '../coordinate';
+import { calculateAutoScroll, rectangleFromPoints, revealOffset, type Point } from '../coordinate';
 import { findInspectableElement, isAreaDrag } from '../measure-utils';
 import { CaptureOverlay } from './capture-overlay';
 import {
-  accessibleFrameDocument, deepElementFromPoint, eventViewportPoint, frameOffset, isHtmlElement, isIframeElement,
-  sameOriginFrameDocuments, styleOf, viewportRect,
+  accessibleFrameDocument, composedContains, composedParent, deepElementFromPoint, eventViewportPoint, frameOffset, isHtmlElement,
+  isIframeElement, sameOriginFrameDocuments, styleOf, viewportRect,
 } from './frames';
 
 export type CaptureMode = 'element' | 'page';
@@ -51,6 +51,8 @@ export class CaptureController implements ToolLifecycle {
   #progress: CaptureProgressState | null = null;
   #originalScroll: CaptureScrollPosition | null = null;
   #originalScrollBehavior = '';
+  /** Window scroll before a partly off-screen scroll box was brought into view; restored afterwards. */
+  #originalWindowScroll: CaptureScrollPosition | null = null;
   /** Inner scroll container to tile through instead of the window; null means the document scrolls. */
   #scrollTarget: HTMLElement | null = null;
   /** Capture the scroll target's entire content (warming it first) rather than a fixed rect within it. */
@@ -268,10 +270,13 @@ export class CaptureController implements ToolLifecycle {
     this.#captureAbortController = abortController;
     this.#progress = null;
     this.#capturing = true; this.#originalScroll = this.#targetPosition();
-    if (this.#mode === 'element') this.#snapshotViewportElements();
     this.#originalScrollBehavior = document.documentElement.style.scrollBehavior;
     document.documentElement.style.scrollBehavior = 'auto';
     this.#preparePageForCapture();
+    if (this.#mode === 'element') {
+      this.#revealScrollTarget();
+      this.#snapshotViewportElements();
+    }
     this.#overlay?.showPreparing(rect);
     try {
       if (this.#mode === 'element') await waitForPageFocus(abortController.signal);
@@ -336,8 +341,25 @@ export class CaptureController implements ToolLifecycle {
     document.documentElement.style.scrollBehavior = this.#originalScrollBehavior;
     if (this.#originalScroll !== null) this.#targetScrollTo(this.#originalScroll);
     this.#originalScroll = null;
+    if (this.#originalWindowScroll !== null) window.scrollTo(this.#originalWindowScroll.x, this.#originalWindowScroll.y);
+    this.#originalWindowScroll = null;
     this.#scrollTarget = null; this.#captureWholeTarget = false; this.#frameCapture = false;
     this.#overlay?.setCaptureHidden(false);
+  }
+  /**
+   * Tiles only ever scroll the inner box, so a box that straddles the window edge (a wide code block
+   * just below the fold) would be photographed partly off-screen. Scroll the window just enough to
+   * show the box's scrollport first; the window position is restored with everything else.
+   */
+  #revealScrollTarget(): void {
+    const target = this.#scrollTarget;
+    if (target === null || target.ownerDocument !== document || target === document.scrollingElement) return;
+    const origin = clientOrigin(target);
+    const deltaX = revealOffset(origin.x, target.clientWidth, document.documentElement.clientWidth);
+    const deltaY = revealOffset(origin.y, target.clientHeight, document.documentElement.clientHeight);
+    if (deltaX === 0 && deltaY === 0) return;
+    this.#originalWindowScroll = { x: window.scrollX, y: window.scrollY };
+    window.scrollBy(deltaX, deltaY);
   }
   #targetRect(): CaptureRect {
     return this.#scrollTarget === null ? pageRect() : {
@@ -404,10 +426,10 @@ export class CaptureController implements ToolLifecycle {
     for (const element of this.#captureCandidates()) {
       if (element.hasAttribute('data-pixelscope-overlay') || this.#suppressedElements.has(element)
         || element.closest(`[${FIXED_CAPTURE_ATTRIBUTE}]`) !== null) continue;
-      if (scrollTarget !== null && (element === scrollTarget || element.contains(scrollTarget))) continue;
+      if (scrollTarget !== null && composedContains(element, scrollTarget)) continue;
       // A captured element keeps its own content, but sticky parts of a captured scroller still tile once.
       if (captureTarget !== null && captureTarget !== scrollTarget
-        && (element === captureTarget || element.contains(captureTarget) || captureTarget.contains(element))) continue;
+        && (composedContains(element, captureTarget) || composedContains(captureTarget, element))) continue;
       if (!isViewportAttached(element, snapshotMoved ? this.#viewportSnapshot.get(element) : undefined)) continue;
       this.#suppressedElements.set(element, {
         visibility: element.style.getPropertyValue('visibility'),
@@ -423,7 +445,7 @@ export class CaptureController implements ToolLifecycle {
     const scrollTarget = this.#scrollTarget;
     for (const element of this.#captureCandidates()) {
       if (element.hasAttribute('data-pixelscope-overlay')) continue;
-      if (scrollTarget !== null && (element === scrollTarget || element.contains(scrollTarget))) continue;
+      if (scrollTarget !== null && composedContains(element, scrollTarget)) continue;
       const rect = viewportRect(element);
       if (intersectsViewport(rect)) this.#viewportSnapshot.set(element, rect);
     }
@@ -503,18 +525,20 @@ export class CaptureController implements ToolLifecycle {
  * would otherwise scroll nothing and produce a single viewport. Pick the largest visible container
  * or frame document that actually scrolls vertically and tile through it instead.
  */
-function findPageScroller(): HTMLElement | null {
+function findPageScroller(rootDocument: Document = document, depth = 0): HTMLElement | null {
+  const body = rootDocument.querySelector('body');
+  if (body === null) return null;
   const viewportArea = innerWidth * innerHeight;
   let best: HTMLElement | null = null;
   let bestArea = 0;
-  for (const element of document.body.querySelectorAll<HTMLElement>('*')) {
+  // <body> itself is a candidate: `html { overflow: hidden }` + `body { overflow: auto }` scrolls the body.
+  for (const element of [body, ...captureElements(body)]) {
     if (element.hasAttribute('data-pixelscope-overlay')) continue;
-    const candidate = scrollableFrameRoot(element) ?? element;
-    if (candidate === element) {
-      if (element.scrollHeight <= element.clientHeight + 2) continue;
-      if (!SCROLLABLE_OVERFLOW.has(getComputedStyle(element).overflowY)) continue;
-    }
-    const rect = element.getBoundingClientRect();
+    const candidate = scrollCandidate(element, depth);
+    if (candidate === null) continue;
+    // A frame document's own scroll is measured by its <iframe>; anything else by the scroller itself.
+    const box = candidate === candidate.ownerDocument.scrollingElement ? element : candidate;
+    const rect = viewportRect(box);
     const left = Math.max(rect.left, 0);
     const top = Math.max(rect.top, 0);
     const width = Math.min(rect.right, innerWidth) - left;
@@ -522,11 +546,25 @@ function findPageScroller(): HTMLElement | null {
     const area = Math.max(0, width) * Math.max(0, height);
     if (area < viewportArea * 0.3 || area <= bestArea) continue;
     // A scroller hidden behind a modal backdrop is not what the user is looking at.
-    const hit = document.elementFromPoint(left + width / 2, top + height / 2);
-    if (hit === null || !element.contains(hit)) continue;
+    const hit = deepElementFromPoint({ x: left + width / 2, y: top + height / 2 });
+    if (hit === null || !composedContains(box, hit)) continue;
     bestArea = area; best = candidate;
   }
   return best;
+}
+
+/**
+ * What would scroll if this element were the page: an overflowing scroll box, or for a same-origin
+ * iframe its document (or, when that document is locked like an app shell, the scroller inside it).
+ */
+function scrollCandidate(element: HTMLElement, depth: number): HTMLElement | null {
+  if (isIframeElement(element)) {
+    const frameDocument = accessibleFrameDocument(element);
+    if (frameDocument === null) return null;
+    return scrollableFrameRoot(element) ?? (depth < 4 ? findPageScroller(frameDocument, depth + 1) : null);
+  }
+  if (element.scrollHeight <= element.clientHeight + 2) return null;
+  return SCROLLABLE_OVERFLOW.has(styleOf(element).overflowY) ? element : null;
 }
 
 /** For a same-origin iframe whose own document scrolls, that document's scrolling element. */
@@ -556,8 +594,8 @@ function findClippingScroller(element: Element): HTMLElement | null {
   let node: Element = element;
   for (let depth = 0; depth < 8; depth += 1) {
     const ownerDocument = node.ownerDocument;
-    for (let current = node.parentElement; current !== null && current !== ownerDocument.documentElement; current = current.parentElement) {
-      if (isScrollContainer(current) && clips(bounds, current)) return current;
+    for (let current = composedParent(node); current !== null && current !== ownerDocument.documentElement; current = composedParent(current)) {
+      if (isHtmlElement(current) && isScrollContainer(current) && clips(bounds, current)) return current;
     }
     const view = ownerDocument.defaultView;
     if (ownerDocument === document || view === null) return null;
@@ -621,11 +659,10 @@ function isFromFrame(event: Event): boolean {
 }
 
 function findViewportAttachedRoot(element: HTMLElement): HTMLElement | null {
-  let current: HTMLElement | null = element;
-  while (current !== null) {
+  // Walk through shadow hosts too, so a fixed custom-element dialog still counts as an overlay.
+  for (let current: Element | null = element; current !== null; current = composedParent(current)) {
     const position = styleOf(current).position;
-    if (position === 'fixed' || position === 'sticky') return current;
-    current = current.parentElement;
+    if ((position === 'fixed' || position === 'sticky') && isHtmlElement(current)) return current;
   }
   return null;
 }

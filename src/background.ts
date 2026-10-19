@@ -1,5 +1,5 @@
 import { deleteCapture, deleteExpiredCaptures, saveCapture } from './capture/capture-store';
-import { createCaptureTiles, createFrameLayout, intersectCaptureRect, shouldSuppressViewportFixed, type CaptureFrameLayout } from './capture/tile-plan';
+import { createCaptureTiles, createFrameLayout, fitCanvasScale, intersectCaptureRect, shouldSuppressViewportFixed, type CaptureFrameLayout } from './capture/tile-plan';
 import { isExtensionMessage, type ExtensionMessage, type ExtensionResponse } from './shared/messages';
 import type { CaptureProgressState, CaptureRect, CaptureScrollPosition, CaptureViewportSize } from './shared/capture';
 import type { ToolMode } from './shared/tool-state';
@@ -193,12 +193,17 @@ async function captureDocument(tabId: number, windowId: number, rect: CaptureRec
         if (canvas === null) {
           scaleX = bitmap.width / screenshotViewport.width;
           scaleY = bitmap.height / screenshotViewport.height;
-          const outputWidth = Math.ceil((frameLayout?.width ?? rect.width) * scaleX);
-          const outputHeight = Math.ceil((frameLayout?.height ?? rect.height) * scaleY);
-          assertCanvasSize(outputWidth, outputHeight);
+          const fullWidth = Math.ceil((frameLayout?.width ?? rect.width) * scaleX);
+          const fullHeight = Math.ceil((frameLayout?.height ?? rect.height) * scaleY);
+          const fit = fitCanvasScale(fullWidth, fullHeight, MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS);
+          const outputWidth = Math.max(1, Math.floor(fullWidth * fit));
+          const outputHeight = Math.max(1, Math.floor(fullHeight * fit));
           canvas = new OffscreenCanvas(outputWidth, outputHeight);
           context = canvas.getContext('2d');
           if (context === null) throw new Error('캡처 이미지를 합성할 수 없습니다.');
+          // Tiles keep drawing in full-resolution coordinates; the transform shrinks oversized pages.
+          context.setTransform(outputWidth / fullWidth, 0, 0, outputHeight / fullHeight, 0, 0);
+          context.imageSmoothingQuality = 'high';
           if (frameLayout !== null) drawFrame(context, bitmap, frameLayout, scaleX, scaleY);
         }
         if (context === null) throw new Error('캡처 이미지를 합성할 수 없습니다.');

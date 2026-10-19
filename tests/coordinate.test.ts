@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateAutoScroll,
+  revealOffset,
   clampLabelPosition,
   documentToViewport,
   isPointInsideRect,
@@ -56,5 +57,12 @@ describe('automatic scrolling', () => {
 
   it('does not scroll in the safe center area', () => {
     expect(calculateAutoScroll({ x: 500, y: 500 }, { width: 1000, height: 1000 })).toEqual({ x: 0, y: 0 });
+  });
+
+  it('scrolls a partly hidden box only as far as needed to show it', () => {
+    expect(revealOffset(100, 200, 600)).toBe(0);
+    expect(revealOffset(400, 385, 600)).toBe(185);
+    expect(revealOffset(-50, 200, 600)).toBe(-50);
+    expect(revealOffset(300, 900, 600)).toBe(300);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCaptureTiles, createFrameLayout, intersectCaptureRect, shouldSuppressViewportFixed } from '../src/capture/tile-plan';
+import { createCaptureTiles, createFrameLayout, fitCanvasScale, intersectCaptureRect, shouldSuppressViewportFixed } from '../src/capture/tile-plan';
 
 describe('capture tile planning', () => {
   it('covers a long page from top to bottom without gaps', () => {
@@ -96,4 +96,14 @@ describe('capture tile planning', () => {
     const layout = createFrameLayout({ width: 400, height: 300 }, { left: -10, top: 0, width: 420, height: 300 }, { width: 400, height: 900 });
     expect(layout).toMatchObject({ width: 400, height: 900, contentOffset: { x: 0, y: 0 }, draws: [] });
   });
+
+  it('keeps captures within canvas limits by scaling oversized output down uniformly', () => {
+    expect(fitCanvasScale(1600, 20_000)).toBe(1);
+    expect(fitCanvasScale(1600, 65_534)).toBeCloseTo(0.5, 5);
+    expect(Math.floor(1600 * fitCanvasScale(1600, 65_534))).toBeLessThanOrEqual(32_767);
+    const pixelLimited = fitCanvasScale(20_000, 20_000);
+    expect(20_000 * pixelLimited * 20_000 * pixelLimited).toBeLessThanOrEqual(268_000_000 + 1);
+    expect(fitCanvasScale(0, 100)).toBe(1);
+  });
+
 });

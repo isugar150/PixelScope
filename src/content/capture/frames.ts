@@ -55,12 +55,15 @@ export function viewportRect(element: Element): DOMRect {
   return new DOMRect(rect.left + offset.x, rect.top + offset.y, rect.width, rect.height);
 }
 
-/** Hit test that descends into same-origin iframes instead of stopping at the <iframe> element. */
+/**
+ * Hit test that descends into same-origin iframes and open shadow roots instead of stopping at the
+ * <iframe> element or the shadow host.
+ */
 export function deepElementFromPoint(point: Point): Element | null {
   let currentDocument: Document = document;
   let local = point;
   for (let depth = 0; depth < 8; depth += 1) {
-    const hit = currentDocument.elementFromPoint(local.x, local.y);
+    const hit = descendShadowRoots(currentDocument.elementFromPoint(local.x, local.y), local);
     if (hit === null || !isIframeElement(hit)) return hit;
     const frameDocument = accessibleFrameDocument(hit);
     if (frameDocument === null) return hit;
@@ -69,6 +72,33 @@ export function deepElementFromPoint(point: Point): Element | null {
     currentDocument = frameDocument;
   }
   return null;
+}
+
+function descendShadowRoots(hit: Element | null, point: Point): Element | null {
+  let current = hit;
+  for (let depth = 0; current?.shadowRoot != null && depth < 16; depth += 1) {
+    const inner = current.shadowRoot.elementFromPoint(point.x, point.y);
+    if (inner === null || inner === current) break;
+    current = inner;
+  }
+  return current;
+}
+
+/** Parent element across shadow-root boundaries (but not out of a frame's document). */
+export function composedParent(element: Element): Element | null {
+  if (element.parentElement !== null) return element.parentElement;
+  const root = element.getRootNode();
+  return isShadowRoot(root) ? root.host : null;
+}
+
+/** `contains()` that also looks through shadow roots and same-origin frame boundaries. */
+export function composedContains(ancestor: Element, node: Element): boolean {
+  let current: Element | null = node;
+  for (let depth = 0; current !== null && depth < 512; depth += 1) {
+    if (current === ancestor) return true;
+    current = composedParent(current) ?? current.ownerDocument.defaultView?.frameElement ?? null;
+  }
+  return false;
 }
 
 /** Every reachable same-origin frame document below `root`, nested frames included. */
@@ -102,6 +132,10 @@ export function isIframeElement(node: Element): node is HTMLIFrameElement {
 
 export function styleOf(element: Element): CSSStyleDeclaration {
   return (element.ownerDocument.defaultView ?? window).getComputedStyle(element);
+}
+
+function isShadowRoot(node: Node): node is ShadowRoot {
+  return node.nodeType === Node.DOCUMENT_FRAGMENT_NODE && 'host' in node;
 }
 
 function isDocument(node: Node): node is Document {

@@ -79,3 +79,14 @@ function edgeVelocity(position: number, extent: number, edgeSize: number, maxSpe
   if (position > extent - edgeSize) return maxSpeed * Math.min(1, (position - (extent - edgeSize)) / edgeSize);
   return 0;
 }
+
+/**
+ * How far to scroll so a box [start, start + length) becomes visible in a viewport of
+ * `viewportLength`: zero when it already is, otherwise the smallest move, preferring its start
+ * when the box is larger than the viewport.
+ */
+export function revealOffset(start: number, length: number, viewportLength: number): number {
+  if (start < 0 || length > viewportLength) return start;
+  const overflow = start + length - viewportLength;
+  return overflow > 0 ? overflow : 0;
+}
