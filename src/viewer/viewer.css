@@ -498,6 +498,25 @@ button:focus-visible {
   cursor: crosshair;
   touch-action: none;
 }
+.annotation-text {
+  position: absolute;
+  z-index: 3;
+  min-width: 1em;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  outline: 1.5px dashed var(--accent-strong);
+  outline-offset: 3px;
+  background: transparent;
+  white-space: pre;
+  resize: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.annotation-text[hidden] {
+  display: none;
+}
 .annotation-preview {
   display: block;
   width: 100%;

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendStrokePoint, arrowGeometry, clearAnnotations, clipRect, commitAnnotation, createHistory, isAnnotationTool, isFillableTool,
-  isMeaningfulAnnotation, mosaicBlockSize, mosaicCells, rectFromPoints, redoAnnotation, strokeWidthForTool, undoAnnotation,
+  isMeaningfulAnnotation, mosaicBlockSize, mosaicCells, rectFromPoints, redoAnnotation, snapToAngle, strokeWidthForTool, textFontSize,
+  textLines, undoAnnotation,
   type Annotation,
 } from '../src/viewer/annotation';
 
@@ -37,6 +38,7 @@ describe('viewer annotation history', () => {
 describe('viewer annotation geometry', () => {
   it('recognizes only the supported tools', () => {
     expect(isAnnotationTool('mosaic')).toBe(true);
+    expect(isAnnotationTool('text')).toBe(true);
     expect(isAnnotationTool('eraser')).toBe(false);
     expect(isAnnotationTool(undefined)).toBe(false);
   });
@@ -46,6 +48,7 @@ describe('viewer annotation geometry', () => {
     expect(isFillableTool('ellipse')).toBe(true);
     expect(isFillableTool('arrow')).toBe(false);
     expect(isFillableTool('pen')).toBe(false);
+    expect(isFillableTool('text')).toBe(false);
     expect(isFillableTool('mosaic')).toBe(false);
   });
 
@@ -75,10 +78,28 @@ describe('viewer annotation geometry', () => {
     expect(mosaicCells({ width: 25, height: 15 }, 12)).toEqual({ width: 3, height: 2 });
   });
 
+  it('snaps a shift-drag to the nearest 45 degree direction from its start', () => {
+    expect(snapToAngle({ x: 10, y: 10 }, { x: 110, y: 16 })).toEqual({ x: 110, y: 10 });
+    expect(snapToAngle({ x: 0, y: 0 }, { x: -3, y: -80 })).toEqual({ x: 0, y: -80 });
+    const diagonal = snapToAngle({ x: 0, y: 0 }, { x: 50, y: 40 });
+    expect(diagonal.x).toBeCloseTo(diagonal.y, 5);
+    expect(snapToAngle({ x: 5, y: 5 }, { x: 5, y: 5 })).toEqual({ x: 5, y: 5 });
+  });
+
+  it('sizes text from the screen slider and splits it into lines', () => {
+    expect(textFontSize(4, 1)).toBe(18);
+    expect(textFontSize(4, 0.5)).toBe(36);
+    expect(textFontSize(24, 1)).toBe(58);
+    expect(textLines('first\r\nsecond\nthird')).toEqual(['first', 'second', 'third']);
+  });
+
   it('ignores stray clicks for shapes and mosaic but keeps a single-point pen dot', () => {
     expect(isMeaningfulAnnotation(pen, 2)).toBe(true);
     expect(isMeaningfulAnnotation({ ...box, end: { x: 1, y: 1 } }, 2)).toBe(false);
     expect(isMeaningfulAnnotation({ kind: 'mosaic', rect: { x: 0, y: 0, width: 40, height: 1 }, block: 8 }, 2)).toBe(false);
+    const text = { kind: 'text', position: { x: 0, y: 0 }, text: '  ', color: '#000000', fontSize: 18 } as const satisfies Annotation;
+    expect(isMeaningfulAnnotation(text, 0)).toBe(false);
+    expect(isMeaningfulAnnotation({ ...text, text: '메모' }, 0)).toBe(true);
   });
 
   it('builds an arrow head at the end point with the shaft stopping at its base', () => {

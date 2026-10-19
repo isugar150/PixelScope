@@ -4,8 +4,9 @@ import type { StoredCapture } from '../shared/capture';
 import { adjustCropRect, createInitialCropRect, imagePointFromViewport, isCropRectWithinBounds, visibleImageCenter } from './crop';
 import type { CropHandle, CropInteraction, CropPoint, CropRect } from './crop';
 import {
-  appendStrokePoint, clearAnnotations, commitAnnotation, createHistory, isAnnotationTool, isFillableTool, isMeaningfulAnnotation,
-  mosaicBlockSize, rectFromPoints, redoAnnotation, strokeWidthForTool, undoAnnotation,
+  TEXT_FONT_FAMILY, TEXT_FONT_WEIGHT, TEXT_LINE_HEIGHT, appendStrokePoint, clearAnnotations, commitAnnotation, createHistory,
+  isAnnotationTool, isFillableTool, isMeaningfulAnnotation, mosaicBlockSize, rectFromPoints, redoAnnotation, snapToAngle,
+  strokeWidthForTool, textFontSize, textLines, undoAnnotation,
 } from './annotation';
 import type { Annotation, AnnotationHistory, AnnotationTool } from './annotation';
 import { drawAnnotation, renderPreview, type AnnotationBase } from './annotation-renderer';
@@ -42,6 +43,8 @@ const annotationPreview = requiredSvg('annotation-preview');
 const annotateColorInput = requiredElement('annotate-color', HTMLInputElement);
 const annotateFillButton = requiredElement('annotate-fill', HTMLButtonElement);
 const annotateSizeInput = requiredElement('annotate-size', HTMLInputElement);
+const annotateSizeLabel = requiredElement('annotate-size-label', HTMLSpanElement);
+const annotationTextInput = requiredElement('annotation-text', HTMLTextAreaElement);
 const annotateSizeValue = requiredElement('annotate-size-value', HTMLOutputElement);
 const annotateUndoButton = requiredElement('annotate-undo', HTMLButtonElement);
 const annotateRedoButton = requiredElement('annotate-redo', HTMLButtonElement);
@@ -69,13 +72,16 @@ let cropStartFrame: number | null = null;
 let edited = false;
 let annotateMode = false;
 let annotationTool: AnnotationTool = 'pen';
-let annotationColor = '#ef4444';
+let annotationColor = '#000000';
 let annotationFill = false;
 let annotationHistory: AnnotationHistory = createHistory();
 /** Where the current (cropped) image starts in source-capture pixels; annotations live in source pixels. */
 let cropOffset: CropPoint = { x: 0, y: 0 };
 let annotationDraft: { readonly pointerId: number; readonly start: CropPoint; annotation: Annotation } | null = null;
 let previewFrame: number | null = null;
+/** The text box being typed into; its position and size are in source-capture pixels. */
+let textEdit: { readonly position: CropPoint; readonly fontSize: number; readonly color: string } | null = null;
+const textMeasure = document.createElement('canvas').getContext('2d');
 let toastTimer: number | null = null;
 
 void initialize().catch((error: unknown) => {
@@ -113,6 +119,9 @@ annotationLayer.addEventListener('pointerdown', beginAnnotation);
 annotationLayer.addEventListener('pointermove', updateAnnotation);
 annotationLayer.addEventListener('pointerup', endAnnotation);
 annotationLayer.addEventListener('pointercancel', cancelAnnotation);
+annotationTextInput.addEventListener('input', layoutTextEditor);
+annotationTextInput.addEventListener('keydown', handleTextEditorKey);
+annotationTextInput.addEventListener('blur', commitTextEditor);
 resetCropButton.addEventListener('click', () => void resetCrop());
 copyButton.addEventListener('click', () => void copyCapture());
 downloadButton.addEventListener('click', () => void downloadCapture());
@@ -162,6 +171,7 @@ function setZoom(value: number): void {
   zoom = Math.min(4, Math.max(0.1, Math.round(value * 20) / 20));
   imageShell.style.width = `${String(Math.round(currentWidth * zoom))}px`;
   zoomValue.value = `${String(Math.round(zoom * 100))}%`;
+  layoutTextEditor();
 }
 
 function startCrop(): void {
@@ -469,6 +479,7 @@ function startAnnotate(): void {
 
 function stopAnnotate(restoreFocus: boolean): void {
   if (!annotateMode) return;
+  commitTextEditor();
   discardAnnotationDraft();
   annotateMode = false;
   annotateToolbar.hidden = true;
@@ -480,6 +491,7 @@ function stopAnnotate(restoreFocus: boolean): void {
 
 function selectAnnotationTool(value: string | undefined): void {
   if (!isAnnotationTool(value)) return;
+  commitTextEditor();
   annotationTool = value;
   updateAnnotationControls();
 }
@@ -500,6 +512,7 @@ function updateAnnotationControls(): void {
   annotateColorInput.disabled = colorless;
   annotateFillButton.disabled = !isFillableTool(annotationTool);
   annotateFillButton.setAttribute('aria-pressed', String(annotationFill));
+  annotateSizeLabel.textContent = annotationTool === 'text' ? '크기' : '굵기';
   annotateUndoButton.disabled = annotationHistory.past.length === 0;
   annotateRedoButton.disabled = annotationHistory.future.length === 0;
   annotateClearButton.disabled = annotationHistory.present.length === 0;
@@ -515,8 +528,11 @@ function setAnnotationHistory(next: AnnotationHistory): void {
 function beginAnnotation(event: PointerEvent): void {
   if (!annotateMode || annotationDraft !== null || event.button !== 0 || !event.isPrimary) return;
   event.preventDefault();
+  // A click outside an open text box finishes that text instead of starting something new.
+  if (textEdit !== null) { commitTextEditor(); return; }
   const start = pointerToSourcePoint(event);
   const size = Number(annotateSizeInput.value);
+  if (annotationTool === 'text') { openTextEditor(start, textFontSize(size, zoom)); return; }
   const annotation: Annotation = annotationTool === 'mosaic'
     ? { kind: 'mosaic', rect: rectFromPoints(start, start), block: mosaicBlockSize(size, zoom) }
     : annotationTool === 'pen' || annotationTool === 'marker'
@@ -535,11 +551,12 @@ function updateAnnotation(event: PointerEvent): void {
   event.preventDefault();
   const point = pointerToSourcePoint(event);
   const draft = annotationDraft.annotation;
+  const start = annotationDraft.start;
   annotationDraft.annotation = draft.kind === 'stroke'
-    ? { ...draft, points: appendStrokePoint(draft.points, point, 0.75 / Math.max(zoom, 0.01)) }
+    ? { ...draft, points: event.shiftKey ? [start, snapToAngle(start, point)] : appendStrokePoint(draft.points, point, 0.75 / Math.max(zoom, 0.01)) }
     : draft.kind === 'mosaic'
-      ? { ...draft, rect: rectFromPoints(annotationDraft.start, point) }
-      : { ...draft, end: point };
+      ? { ...draft, rect: rectFromPoints(start, point) }
+      : draft.kind === 'shape' ? { ...draft, end: point } : draft;
   schedulePreview();
 }
 
@@ -576,6 +593,67 @@ function schedulePreview(): void {
     previewFrame = null;
     renderPreview(annotationPreview, annotationDraft?.annotation ?? null, cropOffset, imageBounds());
   });
+}
+
+function openTextEditor(point: CropPoint, fontSize: number): void {
+  // Centre the first line on the click so the text appears where the pointer is.
+  textEdit = { position: { x: point.x, y: point.y - fontSize * TEXT_LINE_HEIGHT / 2 }, fontSize, color: annotationColor };
+  annotationTextInput.value = '';
+  annotationTextInput.style.color = annotationColor;
+  annotationTextInput.style.fontFamily = TEXT_FONT_FAMILY;
+  annotationTextInput.style.fontWeight = String(TEXT_FONT_WEIGHT);
+  annotationTextInput.style.lineHeight = String(TEXT_LINE_HEIGHT);
+  annotationTextInput.hidden = false;
+  layoutTextEditor();
+  annotationTextInput.focus({ preventScroll: true });
+}
+
+/** Keeps the editor over the same image pixels and sized to its content at the current zoom. */
+function layoutTextEditor(): void {
+  if (textEdit === null || currentWidth === 0) return;
+  const displayFontSize = textEdit.fontSize * zoom;
+  annotationTextInput.style.left = `${String((textEdit.position.x - cropOffset.x) / currentWidth * 100)}%`;
+  annotationTextInput.style.top = `${String((textEdit.position.y - cropOffset.y) / currentHeight * 100)}%`;
+  annotationTextInput.style.fontSize = `${String(displayFontSize)}px`;
+  const lines = textLines(annotationTextInput.value);
+  let widest = displayFontSize;
+  if (textMeasure !== null) {
+    textMeasure.font = `${String(TEXT_FONT_WEIGHT)} ${String(displayFontSize)}px ${TEXT_FONT_FAMILY}`;
+    for (const line of lines) widest = Math.max(widest, textMeasure.measureText(line).width);
+  }
+  annotationTextInput.style.width = `${String(Math.ceil(widest + displayFontSize * 0.6))}px`;
+  annotationTextInput.style.height = `${String(Math.ceil(lines.length * displayFontSize * TEXT_LINE_HEIGHT))}px`;
+}
+
+function handleTextEditorKey(event: KeyboardEvent): void {
+  // Enter while a Korean syllable is still composing belongs to the IME, not to us.
+  if (event.isComposing) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    closeTextEditor();
+  } else if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    commitTextEditor();
+  }
+}
+
+function commitTextEditor(): void {
+  if (textEdit === null) return;
+  const annotation: Annotation = { kind: 'text', position: textEdit.position, text: annotationTextInput.value.trimEnd(), color: textEdit.color, fontSize: textEdit.fontSize };
+  closeTextEditor();
+  if (!isMeaningfulAnnotation(annotation, 0)) return;
+  annotationHistory = commitAnnotation(annotationHistory, annotation);
+  drawCommittedAnnotation(annotation);
+  updateAnnotationControls();
+}
+
+function closeTextEditor(): void {
+  if (textEdit === null) return;
+  // Cleared first so the blur fired by hiding the focused box does not commit it a second time.
+  textEdit = null;
+  annotationTextInput.hidden = true;
+  annotationTextInput.value = '';
 }
 
 function pointerToSourcePoint(event: PointerEvent): CropPoint {
@@ -643,10 +721,11 @@ function handleShortcut(event: KeyboardEvent): boolean {
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return false;
   if (event.code === 'KeyS') {
     event.preventDefault();
+    commitTextEditor();
     if (!event.repeat && !downloadButton.disabled) void downloadCapture();
     return true;
   }
-  if (event.code !== 'KeyC' || event.target instanceof HTMLInputElement || (getSelection()?.toString() ?? '') !== '') return false;
+  if (event.code !== 'KeyC' || isTextField(event.target) || (getSelection()?.toString() ?? '') !== '') return false;
   event.preventDefault();
   if (!event.repeat && !copyButton.disabled) void copyCapture();
   return true;
@@ -654,7 +733,7 @@ function handleShortcut(event: KeyboardEvent): boolean {
 
 /** Undo/redo and Escape while drawing; `code` keeps them working under a Korean IME. */
 function handleAnnotateKey(event: KeyboardEvent): boolean {
-  if (!annotateMode || event.target instanceof HTMLInputElement) return false;
+  if (!annotateMode || isTextField(event.target)) return false;
   if (event.key === 'Escape') {
     event.preventDefault();
     if (annotationDraft !== null) discardAnnotationDraft();
@@ -667,6 +746,10 @@ function handleAnnotateKey(event: KeyboardEvent): boolean {
   event.preventDefault();
   if (annotationDraft === null) setAnnotationHistory(redo ? redoAnnotation(annotationHistory) : undoAnnotation(annotationHistory));
   return true;
+}
+
+function isTextField(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }
 
 function isArrowKey(value: string): value is 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown' {

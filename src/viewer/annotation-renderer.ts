@@ -1,4 +1,7 @@
-import { MARKER_OPACITY, arrowGeometry, clipRect, mosaicCells, rectFromPoints, type Annotation } from './annotation';
+import {
+  MARKER_OPACITY, TEXT_FONT_FAMILY, TEXT_FONT_WEIGHT, TEXT_LINE_HEIGHT, arrowGeometry, clipRect, mosaicCells, rectFromPoints, textLines,
+  type Annotation,
+} from './annotation';
 import type { CropPoint, CropSize } from './crop';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -17,6 +20,7 @@ export interface AnnotationBase {
 export function drawAnnotation(context: CanvasRenderingContext2D, annotation: Annotation, base: AnnotationBase): void {
   context.save();
   if (annotation.kind === 'mosaic') drawMosaic(context, annotation.rect, annotation.block, base);
+  else if (annotation.kind === 'text') drawText(context, annotation.text, annotation.position, annotation.color, annotation.fontSize);
   else if (annotation.kind === 'stroke') drawStroke(context, annotation.points, annotation.color, annotation.width, annotation.tool === 'marker');
   else {
     context.strokeStyle = annotation.color;
@@ -69,6 +73,20 @@ function drawStroke(context: CanvasRenderingContext2D, points: readonly CropPoin
   context.stroke();
 }
 
+/**
+ * Matches the inline editor's CSS line boxes: each line is vertically centred in a
+ * `TEXT_LINE_HEIGHT` box, which is where the browser places textarea glyphs too.
+ */
+function drawText(context: CanvasRenderingContext2D, text: string, position: CropPoint, color: string, fontSize: number): void {
+  const lineHeight = fontSize * TEXT_LINE_HEIGHT;
+  context.font = `${String(TEXT_FONT_WEIGHT)} ${String(fontSize)}px ${TEXT_FONT_FAMILY}`;
+  context.fillStyle = color;
+  context.textBaseline = 'middle';
+  for (const [index, line] of textLines(text).entries()) {
+    context.fillText(line, position.x, position.y + index * lineHeight + lineHeight / 2);
+  }
+}
+
 /** Pixelates the capture itself (not earlier drawings) by averaging into blocks and scaling back up. */
 function drawMosaic(context: CanvasRenderingContext2D, rect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }, block: number, base: AnnotationBase): void {
   const area = clipRect(rect, { x: base.offset.x, y: base.offset.y, width: base.size.width, height: base.size.height });
@@ -100,6 +118,8 @@ export function renderPreview(svg: SVGSVGElement, annotation: Annotation | null,
 }
 
 function previewElement(annotation: Annotation): SVGElement {
+  // Text is typed into an inline editor rather than dragged, so it never has a drag preview.
+  if (annotation.kind === 'text') return svgElement('g', {});
   if (annotation.kind === 'mosaic') {
     const rect = svgElement('rect', {
       x: annotation.rect.x, y: annotation.rect.y, width: annotation.rect.width, height: annotation.rect.height,

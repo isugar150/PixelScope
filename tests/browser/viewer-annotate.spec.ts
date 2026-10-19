@@ -24,6 +24,22 @@ async function samplePng(viewer: Page, dataUrl: string, points: readonly (readon
   }, [dataUrl, points.map(([x, y]) => [x, y] as [number, number])] as const);
 }
 
+/** Counts near-black pixels inside [x, y, width, height] of a PNG data URL. */
+async function darkPixels(viewer: Page, dataUrl: string, area: readonly [number, number, number, number]): Promise<number> {
+  return viewer.evaluate(async ([url, [x, y, width, height]]) => {
+    const bitmap = await createImageBitmap(await (await fetch(url)).blob());
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    const context = canvas.getContext('2d');
+    if (context === null) throw new Error('test canvas unavailable');
+    context.drawImage(bitmap, 0, 0);
+    const data = context.getImageData(Math.round(x), Math.round(y), Math.round(width), Math.round(height)).data;
+    let count = 0;
+    for (let index = 0; index < data.length; index += 4) if ((data[index] ?? 255) < 80 && (data[index + 1] ?? 255) < 80 && (data[index + 2] ?? 255) < 80) count += 1;
+    return count;
+  }, [dataUrl, [...area]] as const);
+}
+
 function expectNear(actual: Rgb | undefined, expected: Rgb): void {
   for (const [index, channel] of expected.entries()) expect(Math.abs((actual?.[index] ?? -999) - channel)).toBeLessThanOrEqual(10);
 }
@@ -99,7 +115,13 @@ test('viewer draws pen, shape and mosaic annotations and flattens them into copy
     await expect(viewer.locator('#annotate')).toHaveAttribute('aria-pressed', 'true');
     await expect(viewer.locator('#annotate-toolbar')).toBeVisible();
 
+    // Black and white lead the palette and black is the default color.
+    await expect(viewer.locator('[data-annotate-color]').first()).toHaveAttribute('data-annotate-color', '#000000');
+    await expect(viewer.locator('[data-annotate-color]').nth(1)).toHaveAttribute('data-annotate-color', '#ffffff');
+    await expect(viewer.locator('[data-annotate-color="#000000"]')).toHaveAttribute('aria-pressed', 'true');
+
     await viewer.locator('[data-annotate-tool="rect"]').click();
+    await viewer.locator('[data-annotate-color="#ef4444"]').click();
     await drag([500, 100], [700, 250]);
     await viewer.locator('[data-annotate-tool="mosaic"]').click();
     await expect(viewer.locator('[data-annotate-color="#3b82f6"]')).toBeDisabled();
@@ -113,6 +135,37 @@ test('viewer draws pen, shape and mosaic annotations and flattens them into copy
     await expect(viewer.locator('#annotate-fill')).toHaveAttribute('aria-pressed', 'true');
     await drag([500, 450], [600, 550]);
 
+    // Shift turns a wobbly pen drag into a straight, level line from its start point.
+    await viewer.locator('[data-annotate-tool="pen"]').click();
+    await viewer.keyboard.down('Shift');
+    const shiftStart = await toScreen(420, 580);
+    const shiftWobble = await toScreen(520, 566);
+    const shiftEnd = await toScreen(620, 572);
+    await viewer.mouse.move(shiftStart.x, shiftStart.y);
+    await viewer.mouse.down();
+    await viewer.mouse.move(shiftWobble.x, shiftWobble.y, { steps: 4 });
+    await viewer.mouse.move(shiftEnd.x, shiftEnd.y, { steps: 4 });
+    await viewer.mouse.up();
+    await viewer.keyboard.up('Shift');
+
+    // Text: click to place, type, Enter to commit (Korean included).
+    await viewer.locator('[data-annotate-tool="text"]').click();
+    await expect(viewer.locator('#annotate-size-label')).toHaveText('크기');
+    await viewer.locator('[data-annotate-color="#000000"]').click();
+    const textPoint = await toScreen(60, 400);
+    await viewer.mouse.click(textPoint.x, textPoint.y);
+    const textBox = viewer.locator('#annotation-text');
+    await expect(textBox).toBeFocused();
+    await viewer.keyboard.type('PixelScope 메모');
+    await viewer.keyboard.press('Enter');
+    await expect(textBox).toBeHidden();
+    // Escape abandons a text box without adding anything.
+    await viewer.mouse.click(textPoint.x, textPoint.y + 120);
+    await viewer.keyboard.type('discard');
+    await viewer.keyboard.press('Escape');
+    await expect(textBox).toBeHidden();
+    await expect(viewer.locator('#annotate-toolbar')).toBeVisible();
+
     await viewer.locator('[data-annotate-tool="pen"]').click();
     await viewer.locator('[data-annotate-color="#3b82f6"]').click();
     await expect(viewer.locator('[data-annotate-color="#3b82f6"]')).toHaveAttribute('aria-pressed', 'true');
@@ -124,6 +177,11 @@ test('viewer draws pen, shape and mosaic annotations and flattens them into copy
     ]);
     expectNear(ellipseCenter, [34, 197, 94]);
     expectNear(rectCenter, [255, 255, 255]);
+    const [shiftLine, shiftWobbleArea] = await samplePng(viewer, await copy(), [px(560, 580), px(520, 566)]);
+    expectNear(shiftLine, [34, 197, 94]);
+    expectNear(shiftWobbleArea, [255, 255, 255]);
+    expect(await darkPixels(viewer, await copy(), [60 * scale, 390 * scale, 200 * scale, 30 * scale])).toBeGreaterThan(40);
+    expect(await darkPixels(viewer, await copy(), [60 * scale, 505 * scale, 120 * scale, 30 * scale])).toBe(0);
     let rectEdge = firstRectEdge;
     let penLine = firstPenLine;
     expectNear(rectEdge, [239, 68, 68]);

@@ -1,6 +1,6 @@
 import type { CropPoint, CropRect, CropSize } from './crop';
 
-export type AnnotationTool = 'pen' | 'marker' | 'rect' | 'ellipse' | 'arrow' | 'mosaic';
+export type AnnotationTool = 'pen' | 'marker' | 'rect' | 'ellipse' | 'arrow' | 'text' | 'mosaic';
 export type ShapeTool = 'rect' | 'ellipse' | 'arrow';
 
 /**
@@ -10,6 +10,7 @@ export type ShapeTool = 'rect' | 'ellipse' | 'arrow';
 export type Annotation =
   | { readonly kind: 'stroke'; readonly tool: 'pen' | 'marker'; readonly points: readonly CropPoint[]; readonly color: string; readonly width: number }
   | { readonly kind: 'shape'; readonly tool: ShapeTool; readonly start: CropPoint; readonly end: CropPoint; readonly color: string; readonly width: number; readonly fill: boolean }
+  | { readonly kind: 'text'; readonly position: CropPoint; readonly text: string; readonly color: string; readonly fontSize: number }
   | { readonly kind: 'mosaic'; readonly rect: CropRect; readonly block: number };
 
 export interface AnnotationHistory {
@@ -19,6 +20,10 @@ export interface AnnotationHistory {
 }
 
 export const MARKER_OPACITY = 0.35;
+/** Shared by the inline editor and the canvas so committed text lands exactly where it was typed. */
+export const TEXT_FONT_FAMILY = '"Pretendard", "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+export const TEXT_FONT_WEIGHT = 600;
+export const TEXT_LINE_HEIGHT = 1.3;
 const MARKER_WIDTH_FACTOR = 4;
 const MOSAIC_BLOCK_FACTOR = 3;
 const MINIMUM_MOSAIC_BLOCK = 4;
@@ -29,7 +34,7 @@ export function isFillableTool(tool: AnnotationTool): tool is 'rect' | 'ellipse'
 }
 
 export function isAnnotationTool(value: string | undefined): value is AnnotationTool {
-  return value === 'pen' || value === 'marker' || value === 'rect' || value === 'ellipse' || value === 'arrow' || value === 'mosaic';
+  return value === 'pen' || value === 'marker' || value === 'rect' || value === 'ellipse' || value === 'arrow' || value === 'text' || value === 'mosaic';
 }
 
 export function createHistory(): AnnotationHistory {
@@ -65,6 +70,32 @@ export function redoAnnotation(history: AnnotationHistory): AnnotationHistory {
 export function strokeWidthForTool(tool: 'pen' | 'marker' | ShapeTool, screenSize: number, zoom: number): number {
   const width = screenSize * (tool === 'marker' ? MARKER_WIDTH_FACTOR : 1);
   return Math.max(1, width / Math.max(zoom, 0.01));
+}
+
+/** Text size follows the same screen-pixel slider: 1 → 12px, 4 (default) → 18px, 24 → 58px on screen. */
+export function textFontSize(screenSize: number, zoom: number): number {
+  return (10 + screenSize * 2) / Math.max(zoom, 0.01);
+}
+
+export function textLines(text: string): string[] {
+  return text.replace(/\r\n?/g, '\n').split('\n');
+}
+
+/**
+ * Shift-drag turns a freehand stroke into a straight line from where it started, snapped to the
+ * nearest `stepDegrees` direction so horizontal and vertical lines come out perfectly level.
+ */
+export function snapToAngle(start: CropPoint, point: CropPoint, stepDegrees = 45): CropPoint {
+  const dx = point.x - start.x;
+  const dy = point.y - start.y;
+  if (dx === 0 && dy === 0) return start;
+  const step = stepDegrees * Math.PI / 180;
+  const angle = Math.round(Math.atan2(dy, dx) / step) * step;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const length = dx * cos + dy * sin;
+  // Rounding leaves exact zeros instead of 1e-15 noise on the snapped axis.
+  return { x: start.x + Math.round(length * cos * 1e6) / 1e6, y: start.y + Math.round(length * sin * 1e6) / 1e6 };
 }
 
 export function mosaicBlockSize(screenSize: number, zoom: number): number {
@@ -103,6 +134,7 @@ export function mosaicCells(size: CropSize, block: number): CropSize {
 /** A drag shorter than this is treated as a stray click rather than a shape. */
 export function isMeaningfulAnnotation(annotation: Annotation, minimumSize: number): boolean {
   if (annotation.kind === 'stroke') return annotation.points.length > 0;
+  if (annotation.kind === 'text') return annotation.text.trim() !== '';
   if (annotation.kind === 'mosaic') return annotation.rect.width >= minimumSize && annotation.rect.height >= minimumSize;
   return Math.hypot(annotation.end.x - annotation.start.x, annotation.end.y - annotation.start.y) >= minimumSize;
 }
