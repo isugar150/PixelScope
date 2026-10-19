@@ -4,6 +4,8 @@ import { defineConfig } from 'vite';
 
 const rootDirectory = import.meta.dirname;
 const manifestSource = readFileSync(resolve(rootDirectory, 'manifest.json'), 'utf8');
+// Self-contained public page kept under docs/; served from the extension root for the Web Store listing.
+const privacyPolicySource = readFileSync(resolve(rootDirectory, 'docs/privacy-policy.html'), 'utf8');
 
 export default defineConfig({
   build: {
@@ -17,7 +19,6 @@ export default defineConfig({
         content: resolve(rootDirectory, 'src/content/index.ts'),
         'shortcut-listener': resolve(rootDirectory, 'src/content/shortcut-listener.ts'),
         popup: resolve(rootDirectory, 'src/popup/popup.html'),
-        privacy: resolve(rootDirectory, 'docs/privacy-policy.html'),
         viewer: resolve(rootDirectory, 'src/viewer/viewer.html'),
       },
       output: {
@@ -34,6 +35,7 @@ export default defineConfig({
       name: 'copy-extension-manifest',
       generateBundle() {
         this.emitFile({ type: 'asset', fileName: 'manifest.json', source: manifestSource });
+        this.emitFile({ type: 'asset', fileName: 'privacy-policy.html', source: privacyPolicySource });
       },
     },
   ],
