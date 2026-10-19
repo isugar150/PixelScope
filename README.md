@@ -86,4 +86,4 @@ tests/coordinate.test.ts        좌표, 영역, 라벨, 자동 스크롤 단위 
 
 화면 캡처와 색상 계산은 브라우저 안에서만 처리되며 외부 서버로 전송하지 않습니다. 화면 전체 피커도 사용자가 직접 클릭한 한 픽셀의 색상만 메모리에서 처리하며 화면 이미지를 저장하지 않습니다. 완성된 캡처 PNG는 뷰어 전달을 위해 extension-origin IndexedDB에 임시 저장되고, 뷰어 탭 종료 또는 1시간 TTL 후 자동 삭제됩니다. 원격 코드, `eval`, `unsafe-eval`을 사용하지 않습니다.
 
-Chrome Web Store에 등록할 개인정보처리방침은 [`privacy-policy.html`](./privacy-policy.html)이며, 프로덕션 빌드 시 `dist/privacy-policy.html`로 생성됩니다. 심사에 사용할 때는 이 파일을 로그인 없이 접근 가능한 HTTPS 주소에 배포한 후 해당 URL을 개발자 대시보드에 입력해야 합니다.
+Chrome Web Store에 등록할 개인정보처리방침은 [`docs/privacy-policy.html`](docs/privacy-policy.html)이며, 프로덕션 빌드 시 `dist/privacy-policy.html`로 생성됩니다. 심사에 사용할 때는 이 파일을 로그인 없이 접근 가능한 HTTPS 주소에 배포한 후 해당 URL을 개발자 대시보드에 입력해야 합니다.
