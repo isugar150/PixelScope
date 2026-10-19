@@ -17,7 +17,7 @@ export default defineConfig({
         content: resolve(rootDirectory, 'src/content/index.ts'),
         'shortcut-listener': resolve(rootDirectory, 'src/content/shortcut-listener.ts'),
         popup: resolve(rootDirectory, 'src/popup/popup.html'),
-        privacy: resolve(rootDirectory, 'privacy-policy.html'),
+        privacy: resolve(rootDirectory, 'docs/privacy-policy.html'),
         viewer: resolve(rootDirectory, 'src/viewer/viewer.html'),
       },
       output: {

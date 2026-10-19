@@ -182,7 +182,8 @@ h1 {
 .primary:hover {
   background: var(--accent-strong-hover);
 }
-#crop[aria-pressed="true"] {
+#crop[aria-pressed="true"],
+#annotate[aria-pressed="true"] {
   background: var(--accent-soft-strong);
   color: var(--accent-strong);
   box-shadow: inset 0 0 0 1.5px var(--accent-strong);
@@ -221,6 +222,184 @@ button:focus-visible {
 .crop-fields,
 .crop-actions {
   gap: 8px;
+}
+.annotate-toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.annotate-toolbar[hidden] {
+  display: none;
+}
+.annotate-toolbar:not([hidden]) {
+  animation: toolbar-in var(--motion-panel) var(--ease-standard);
+}
+.annotate-tools,
+.annotate-style,
+.annotate-colors,
+.annotate-actions,
+.annotate-size {
+  display: flex;
+  align-items: center;
+}
+.annotate-tools {
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.annotate-tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) ease;
+}
+.annotate-tools button:last-child {
+  border-right: 0;
+}
+.annotate-tools button:hover {
+  background: var(--accent-soft);
+}
+.annotate-tools button[aria-pressed="true"] {
+  background: var(--accent-soft-strong);
+  color: var(--accent-strong);
+  font-weight: 750;
+  box-shadow: inset 0 -2.5px 0 var(--accent-strong);
+}
+.annotate-tools button:focus-visible {
+  outline-offset: -3px;
+}
+.annotate-style {
+  gap: 14px;
+}
+.annotate-colors {
+  gap: 6px;
+}
+.swatch {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid rgba(60, 54, 83, 0.25);
+  border-radius: 50%;
+  background: var(--swatch);
+  cursor: pointer;
+  transition: box-shadow var(--motion-fast) ease, transform 100ms var(--ease-standard);
+}
+.swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent-strong);
+  transform: scale(1.08);
+}
+.swatch[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px rgba(60, 54, 83, 0.35);
+}
+.swatch:disabled,
+.swatch-custom:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+.swatch-custom {
+  display: inline-block;
+  overflow: hidden;
+  background: conic-gradient(#ef4444, #facc15, #22c55e, #3b82f6, #a855f7, #ef4444);
+}
+.swatch-custom:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.swatch-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: inherit;
+}
+.annotate-fill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.annotate-fill .fill-icon {
+  fill: none;
+}
+.annotate-fill[aria-pressed="true"] {
+  border-color: var(--accent-strong);
+  background: var(--accent-soft-strong);
+  color: var(--accent-strong);
+  font-weight: 750;
+}
+.annotate-fill[aria-pressed="true"] .fill-icon {
+  fill: currentcolor;
+}
+.annotate-fill:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.annotate-size {
+  gap: 7px;
+  color: var(--muted);
+  font: 700 11px/1 ui-monospace, monospace;
+}
+.annotate-size input {
+  width: 96px;
+  accent-color: var(--accent-strong);
+}
+.annotate-size output {
+  min-width: 20px;
+  color: var(--accent-strong);
+  text-align: right;
+}
+.annotate-actions {
+  gap: 8px;
+  margin-left: auto;
+}
+.annotate-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.annotate-actions .icon-only {
+  width: 34px;
+  padding: 0;
+}
+.annotate-actions button:disabled {
+  cursor: not-allowed;
 }
 .crop-fields {
   min-width: 0;
@@ -300,6 +479,31 @@ button:focus-visible {
   height: auto;
   user-select: none;
   -webkit-user-drag: none;
+}
+.annotation-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.annotation-canvas[hidden],
+.annotation-layer[hidden] {
+  display: none;
+}
+.annotation-layer {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+.annotation-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
 }
 .crop-layer {
   position: absolute;
@@ -418,7 +622,7 @@ button:focus-visible {
 }
 @media (max-width: 860px) {
   header {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     align-items: flex-start;
     gap: 10px;
   }
@@ -455,6 +659,37 @@ button:focus-visible {
     align-items: stretch;
     flex-direction: column;
   }
+  .annotate-tools {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+  .annotate-tools button {
+    justify-content: center;
+    height: 40px;
+    border-bottom: 1px solid var(--border);
+  }
+  .annotate-tools button:nth-child(3n) {
+    border-right: 0;
+  }
+  .annotate-tools button:nth-last-child(-n + 3) {
+    border-bottom: 0;
+  }
+  .annotate-style {
+    flex-wrap: wrap;
+  }
+  .annotate-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+  .annotate-actions button:not(.icon-only) {
+    flex: 1;
+    min-height: 42px;
+  }
+  .annotate-actions .icon-only {
+    width: 42px;
+    min-height: 42px;
+  }
   .crop-fields {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -478,7 +713,7 @@ button:focus-visible {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  main, .crop-toolbar, .image-shell {
+  main, .crop-toolbar, .annotate-toolbar, .image-shell {
     animation: none;
     opacity: 1;
     transform: none;
@@ -490,7 +725,9 @@ button:focus-visible {
   .zoom button,
   .actions > button,
   .crop-actions button,
-  .crop-fields input {
+  .crop-fields input,
+  .annotate-tools button,
+  .swatch {
     transition: none;
   }
 }

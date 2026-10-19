@@ -3,6 +3,12 @@ import { deleteCapture, deleteExpiredCaptures, getCapture } from '../capture/cap
 import type { StoredCapture } from '../shared/capture';
 import { adjustCropRect, createInitialCropRect, imagePointFromViewport, isCropRectWithinBounds, visibleImageCenter } from './crop';
 import type { CropHandle, CropInteraction, CropPoint, CropRect } from './crop';
+import {
+  appendStrokePoint, clearAnnotations, commitAnnotation, createHistory, isAnnotationTool, isFillableTool, isMeaningfulAnnotation,
+  mosaicBlockSize, rectFromPoints, redoAnnotation, strokeWidthForTool, undoAnnotation,
+} from './annotation';
+import type { Annotation, AnnotationHistory, AnnotationTool } from './annotation';
+import { drawAnnotation, renderPreview, type AnnotationBase } from './annotation-renderer';
 
 const captureId = new URLSearchParams(location.search).get('id');
 const title = requiredElement('title', HTMLHeadingElement);
@@ -28,6 +34,21 @@ const cropSize = requiredElement('crop-size', HTMLSpanElement);
 const cropSummary = requiredElement('crop-summary', HTMLOutputElement);
 const cropApplyButton = requiredElement('crop-apply', HTMLButtonElement);
 const cropCancelButton = requiredElement('crop-cancel', HTMLButtonElement);
+const annotateButton = requiredElement('annotate', HTMLButtonElement);
+const annotateToolbar = requiredElement('annotate-toolbar', HTMLElement);
+const annotationCanvas = requiredElement('annotation-canvas', HTMLCanvasElement);
+const annotationLayer = requiredElement('annotation-layer', HTMLDivElement);
+const annotationPreview = requiredSvg('annotation-preview');
+const annotateColorInput = requiredElement('annotate-color', HTMLInputElement);
+const annotateFillButton = requiredElement('annotate-fill', HTMLButtonElement);
+const annotateSizeInput = requiredElement('annotate-size', HTMLInputElement);
+const annotateSizeValue = requiredElement('annotate-size-value', HTMLOutputElement);
+const annotateUndoButton = requiredElement('annotate-undo', HTMLButtonElement);
+const annotateRedoButton = requiredElement('annotate-redo', HTMLButtonElement);
+const annotateClearButton = requiredElement('annotate-clear', HTMLButtonElement);
+const annotateDoneButton = requiredElement('annotate-done', HTMLButtonElement);
+const annotateToolButtons = Array.from(annotateToolbar.querySelectorAll<HTMLButtonElement>('[data-annotate-tool]'));
+const annotateColorButtons = Array.from(annotateToolbar.querySelectorAll<HTMLButtonElement>('[data-annotate-color]'));
 const cropInputs = {
   x: requiredElement('crop-x', HTMLInputElement),
   y: requiredElement('crop-y', HTMLInputElement),
@@ -46,6 +67,15 @@ let cropDrag: { readonly pointerId: number; readonly start: CropPoint; readonly 
 let cropMode = false;
 let cropStartFrame: number | null = null;
 let edited = false;
+let annotateMode = false;
+let annotationTool: AnnotationTool = 'pen';
+let annotationColor = '#ef4444';
+let annotationFill = false;
+let annotationHistory: AnnotationHistory = createHistory();
+/** Where the current (cropped) image starts in source-capture pixels; annotations live in source pixels. */
+let cropOffset: CropPoint = { x: 0, y: 0 };
+let annotationDraft: { readonly pointerId: number; readonly start: CropPoint; annotation: Annotation } | null = null;
+let previewFrame: number | null = null;
 let toastTimer: number | null = null;
 
 void initialize().catch((error: unknown) => {
@@ -69,9 +99,23 @@ zoomOut.addEventListener('click', () => setZoom(zoom - 0.25));
 zoomIn.addEventListener('click', () => setZoom(zoom + 0.25));
 fitButton.addEventListener('click', fitToWidth);
 cropButton.addEventListener('click', startCrop);
+annotateButton.addEventListener('click', () => { if (annotateMode) stopAnnotate(true); else startAnnotate(); });
+annotateDoneButton.addEventListener('click', () => stopAnnotate(true));
+annotateUndoButton.addEventListener('click', () => setAnnotationHistory(undoAnnotation(annotationHistory)));
+annotateRedoButton.addEventListener('click', () => setAnnotationHistory(redoAnnotation(annotationHistory)));
+annotateClearButton.addEventListener('click', () => setAnnotationHistory(clearAnnotations(annotationHistory)));
+for (const button of annotateToolButtons) button.addEventListener('click', () => selectAnnotationTool(button.dataset.annotateTool));
+for (const button of annotateColorButtons) button.addEventListener('click', () => selectAnnotationColor(button.dataset.annotateColor ?? annotationColor));
+annotateColorInput.addEventListener('input', () => selectAnnotationColor(annotateColorInput.value));
+annotateFillButton.addEventListener('click', () => { annotationFill = !annotationFill; updateAnnotationControls(); });
+annotateSizeInput.addEventListener('input', () => { annotateSizeValue.value = annotateSizeInput.value; });
+annotationLayer.addEventListener('pointerdown', beginAnnotation);
+annotationLayer.addEventListener('pointermove', updateAnnotation);
+annotationLayer.addEventListener('pointerup', endAnnotation);
+annotationLayer.addEventListener('pointercancel', cancelAnnotation);
 resetCropButton.addEventListener('click', () => void resetCrop());
 copyButton.addEventListener('click', () => void copyCapture());
-downloadButton.addEventListener('click', downloadCapture);
+downloadButton.addEventListener('click', () => void downloadCapture());
 cropApplyButton.addEventListener('click', () => void applyCrop());
 cropCancelButton.addEventListener('click', () => cancelCrop(true));
 cropLayer.addEventListener('pointerdown', beginCropDrag);
@@ -82,6 +126,7 @@ for (const input of Object.values(cropInputs)) input.addEventListener('input', u
 window.addEventListener('keydown', handleKeydown);
 window.addEventListener('pagehide', () => {
   if (cropStartFrame !== null) cancelAnimationFrame(cropStartFrame);
+  if (previewFrame !== null) cancelAnimationFrame(previewFrame);
   if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
   if (captureId !== null) void deleteCapture(captureId).catch(() => undefined);
 });
@@ -121,6 +166,7 @@ function setZoom(value: number): void {
 
 function startCrop(): void {
   if (currentBlob === null || cropMode) return;
+  stopAnnotate(false);
   cropMode = true;
   cropToolbar.hidden = false;
   cropLayer.hidden = false;
@@ -311,8 +357,11 @@ async function applyCrop(): Promise<void> {
     const nextBlob = await cropImage(currentBlob, cropRect);
     const nextWidth = cropRect.width;
     const nextHeight = cropRect.height;
+    const nextOffset = { x: cropOffset.x + cropRect.x, y: cropOffset.y + cropRect.y };
     cancelCrop(false);
     await setCurrentImage(nextBlob, nextWidth, nextHeight);
+    cropOffset = nextOffset;
+    redrawAnnotations();
     edited = true;
     resetCropButton.hidden = false;
     fitToWidth();
@@ -331,6 +380,8 @@ async function resetCrop(): Promise<void> {
   resetCropButton.disabled = true;
   try {
     await setCurrentImage(sourceCapture.blob, sourceCapture.width, sourceCapture.height);
+    cropOffset = { x: 0, y: 0 };
+    redrawAnnotations();
     edited = false;
     resetCropButton.hidden = true;
     fitToWidth();
@@ -366,22 +417,206 @@ function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob> {
 async function copyCapture(): Promise<void> {
   if (currentBlob === null) return;
   try {
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': currentBlob })]);
+    // A pending Blob keeps the click's user activation while drawings are being flattened.
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': exportBlob() })]);
     showToast('이미지를 클립보드에 복사했습니다.');
   } catch { showToast('이 환경에서는 이미지 클립보드 복사를 사용할 수 없습니다.'); }
 }
 
-function downloadCapture(): void {
+async function downloadCapture(): Promise<void> {
   if (sourceCapture === null || objectUrl === null) return;
+  const annotated = annotationHistory.present.length > 0;
+  let url = objectUrl;
+  try {
+    if (annotated) url = URL.createObjectURL(await exportBlob());
+  } catch {
+    showToast('그린 내용을 이미지에 합성하지 못했습니다.');
+    return;
+  }
   const anchor = document.createElement('a');
-  anchor.href = objectUrl;
-  anchor.download = captureFilename(sourceCapture.title, edited);
+  anchor.href = url;
+  anchor.download = captureFilename(sourceCapture.title, edited, annotated);
   anchor.click();
+  if (url !== objectUrl) window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
   showToast('PNG 저장을 시작했습니다.');
 }
 
+/** The image as shown: current (possibly cropped) capture with every drawing flattened on top. */
+async function exportBlob(): Promise<Blob> {
+  if (currentBlob === null) throw new Error('캡처 이미지가 없습니다.');
+  if (annotationHistory.present.length === 0) return currentBlob;
+  const canvas = document.createElement('canvas');
+  canvas.width = currentWidth;
+  canvas.height = currentHeight;
+  const context = canvas.getContext('2d');
+  if (context === null) throw new Error('Canvas 2D context is unavailable.');
+  context.drawImage(image, 0, 0, currentWidth, currentHeight);
+  context.drawImage(annotationCanvas, 0, 0);
+  return canvasToPng(canvas);
+}
+
+function startAnnotate(): void {
+  if (currentBlob === null || annotateMode) return;
+  cancelCrop(false);
+  annotateMode = true;
+  annotateToolbar.hidden = false;
+  annotationLayer.hidden = false;
+  annotateButton.setAttribute('aria-pressed', 'true');
+  imageShell.classList.add('is-annotating');
+  renderPreview(annotationPreview, null, cropOffset, imageBounds());
+  updateAnnotationControls();
+}
+
+function stopAnnotate(restoreFocus: boolean): void {
+  if (!annotateMode) return;
+  discardAnnotationDraft();
+  annotateMode = false;
+  annotateToolbar.hidden = true;
+  annotationLayer.hidden = true;
+  annotateButton.setAttribute('aria-pressed', 'false');
+  imageShell.classList.remove('is-annotating');
+  if (restoreFocus) annotateButton.focus({ preventScroll: true });
+}
+
+function selectAnnotationTool(value: string | undefined): void {
+  if (!isAnnotationTool(value)) return;
+  annotationTool = value;
+  updateAnnotationControls();
+}
+
+function selectAnnotationColor(color: string): void {
+  annotationColor = color;
+  annotateColorInput.value = color;
+  updateAnnotationControls();
+}
+
+function updateAnnotationControls(): void {
+  for (const button of annotateToolButtons) button.setAttribute('aria-pressed', String(button.dataset.annotateTool === annotationTool));
+  const colorless = annotationTool === 'mosaic';
+  for (const button of annotateColorButtons) {
+    button.setAttribute('aria-pressed', String(button.dataset.annotateColor === annotationColor));
+    button.disabled = colorless;
+  }
+  annotateColorInput.disabled = colorless;
+  annotateFillButton.disabled = !isFillableTool(annotationTool);
+  annotateFillButton.setAttribute('aria-pressed', String(annotationFill));
+  annotateUndoButton.disabled = annotationHistory.past.length === 0;
+  annotateRedoButton.disabled = annotationHistory.future.length === 0;
+  annotateClearButton.disabled = annotationHistory.present.length === 0;
+}
+
+function setAnnotationHistory(next: AnnotationHistory): void {
+  if (next === annotationHistory) return;
+  annotationHistory = next;
+  redrawAnnotations();
+  updateAnnotationControls();
+}
+
+function beginAnnotation(event: PointerEvent): void {
+  if (!annotateMode || annotationDraft !== null || event.button !== 0 || !event.isPrimary) return;
+  event.preventDefault();
+  const start = pointerToSourcePoint(event);
+  const size = Number(annotateSizeInput.value);
+  const annotation: Annotation = annotationTool === 'mosaic'
+    ? { kind: 'mosaic', rect: rectFromPoints(start, start), block: mosaicBlockSize(size, zoom) }
+    : annotationTool === 'pen' || annotationTool === 'marker'
+      ? { kind: 'stroke', tool: annotationTool, points: [start], color: annotationColor, width: strokeWidthForTool(annotationTool, size, zoom) }
+      : {
+          kind: 'shape', tool: annotationTool, start, end: start, color: annotationColor,
+          width: strokeWidthForTool(annotationTool, size, zoom), fill: annotationFill && isFillableTool(annotationTool),
+        };
+  annotationDraft = { pointerId: event.pointerId, start, annotation };
+  annotationLayer.setPointerCapture(event.pointerId);
+  schedulePreview();
+}
+
+function updateAnnotation(event: PointerEvent): void {
+  if (annotationDraft === null || event.pointerId !== annotationDraft.pointerId) return;
+  event.preventDefault();
+  const point = pointerToSourcePoint(event);
+  const draft = annotationDraft.annotation;
+  annotationDraft.annotation = draft.kind === 'stroke'
+    ? { ...draft, points: appendStrokePoint(draft.points, point, 0.75 / Math.max(zoom, 0.01)) }
+    : draft.kind === 'mosaic'
+      ? { ...draft, rect: rectFromPoints(annotationDraft.start, point) }
+      : { ...draft, end: point };
+  schedulePreview();
+}
+
+function endAnnotation(event: PointerEvent): void {
+  if (annotationDraft === null || event.pointerId !== annotationDraft.pointerId) return;
+  event.preventDefault();
+  updateAnnotation(event);
+  const { annotation } = annotationDraft;
+  discardAnnotationDraft();
+  if (!isMeaningfulAnnotation(annotation, 2 / Math.max(zoom, 0.01))) return;
+  annotationHistory = commitAnnotation(annotationHistory, annotation);
+  drawCommittedAnnotation(annotation);
+  updateAnnotationControls();
+}
+
+function cancelAnnotation(event: PointerEvent): void {
+  if (annotationDraft === null || event.pointerId !== annotationDraft.pointerId) return;
+  discardAnnotationDraft();
+}
+
+function discardAnnotationDraft(): void {
+  if (annotationDraft !== null && annotationLayer.hasPointerCapture(annotationDraft.pointerId)) {
+    annotationLayer.releasePointerCapture(annotationDraft.pointerId);
+  }
+  annotationDraft = null;
+  if (previewFrame !== null) cancelAnimationFrame(previewFrame);
+  previewFrame = null;
+  renderPreview(annotationPreview, null, cropOffset, imageBounds());
+}
+
+function schedulePreview(): void {
+  if (previewFrame !== null) return;
+  previewFrame = requestAnimationFrame(() => {
+    previewFrame = null;
+    renderPreview(annotationPreview, annotationDraft?.annotation ?? null, cropOffset, imageBounds());
+  });
+}
+
+function pointerToSourcePoint(event: PointerEvent): CropPoint {
+  const point = imagePointFromViewport({ x: event.clientX, y: event.clientY }, image.getBoundingClientRect(), imageBounds());
+  return { x: point.x + cropOffset.x, y: point.y + cropOffset.y };
+}
+
+function annotationBase(): AnnotationBase {
+  return { image, offset: cropOffset, size: imageBounds() };
+}
+
+/** Rebuilds the full-resolution drawing layer; only needed after undo, clear, or a crop change. */
+function redrawAnnotations(): void {
+  if (annotationHistory.present.length === 0) {
+    annotationCanvas.width = 0;
+    annotationCanvas.height = 0;
+    annotationCanvas.hidden = true;
+    return;
+  }
+  annotationCanvas.width = currentWidth;
+  annotationCanvas.height = currentHeight;
+  annotationCanvas.hidden = false;
+  const context = annotationCanvas.getContext('2d');
+  if (context === null) return;
+  context.setTransform(1, 0, 0, 1, -cropOffset.x, -cropOffset.y);
+  for (const annotation of annotationHistory.present) drawAnnotation(context, annotation, annotationBase());
+}
+
+/** New annotations only ever stack on top, so committing one never repaints the earlier ones. */
+function drawCommittedAnnotation(annotation: Annotation): void {
+  const context = annotationCanvas.getContext('2d');
+  if (context === null || annotationCanvas.hidden || annotationCanvas.width !== currentWidth || annotationCanvas.height !== currentHeight) {
+    redrawAnnotations();
+    return;
+  }
+  context.setTransform(1, 0, 0, 1, -cropOffset.x, -cropOffset.y);
+  drawAnnotation(context, annotation, annotationBase());
+}
+
 function handleKeydown(event: KeyboardEvent): void {
-  if (handleShortcut(event) || !cropMode) return;
+  if (handleShortcut(event) || handleAnnotateKey(event) || !cropMode) return;
   if (event.key === 'Escape') {
     event.preventDefault();
     cancelCrop(true);
@@ -408,12 +643,29 @@ function handleShortcut(event: KeyboardEvent): boolean {
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return false;
   if (event.code === 'KeyS') {
     event.preventDefault();
-    if (!event.repeat && !downloadButton.disabled) downloadCapture();
+    if (!event.repeat && !downloadButton.disabled) void downloadCapture();
     return true;
   }
   if (event.code !== 'KeyC' || event.target instanceof HTMLInputElement || (getSelection()?.toString() ?? '') !== '') return false;
   event.preventDefault();
   if (!event.repeat && !copyButton.disabled) void copyCapture();
+  return true;
+}
+
+/** Undo/redo and Escape while drawing; `code` keeps them working under a Korean IME. */
+function handleAnnotateKey(event: KeyboardEvent): boolean {
+  if (!annotateMode || event.target instanceof HTMLInputElement) return false;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    if (annotationDraft !== null) discardAnnotationDraft();
+    else stopAnnotate(true);
+    return true;
+  }
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return false;
+  const redo = event.code === 'KeyY' || (event.code === 'KeyZ' && event.shiftKey);
+  if (!redo && event.code !== 'KeyZ') return false;
+  event.preventDefault();
+  if (annotationDraft === null) setAnnotationHistory(redo ? redoAnnotation(annotationHistory) : undoAnnotation(annotationHistory));
   return true;
 }
 
@@ -425,14 +677,14 @@ function imageBounds(): { readonly width: number; readonly height: number } {
   return { width: currentWidth, height: currentHeight };
 }
 
-function captureFilename(captureTitle: string, isEdited: boolean): string {
+function captureFilename(captureTitle: string, isEdited: boolean, isAnnotated: boolean): string {
   const printableTitle = Array.from(captureTitle, (character) => character.charCodeAt(0) < 32 ? '_' : character).join('');
   const safeTitle = printableTitle
     .replace(/[<>:"/\\|?*]/g, '_')
     .replace(/[. ]+$/g, '')
     .trim()
     .slice(0, 170);
-  return `${safeTitle || 'PixelScope-capture'}${isEdited ? '-cropped' : ''}.png`;
+  return `${safeTitle || 'PixelScope-capture'}${isEdited ? '-cropped' : ''}${isAnnotated ? '-annotated' : ''}.png`;
 }
 
 function showError(message: string): void {
@@ -451,6 +703,12 @@ function showToast(message: string): void {
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function requiredSvg(id: string): SVGSVGElement {
+  const element = document.getElementById(id);
+  if (!(element instanceof SVGSVGElement)) throw new Error(`필수 요소를 찾을 수 없습니다: ${id}`);
+  return element;
 }
 
 function requiredElement<T extends HTMLElement>(id: string, constructor: { new(): T }): T {

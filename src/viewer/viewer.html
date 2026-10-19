@@ -10,6 +10,12 @@
             <button id="zoom-out" type="button" aria-label="축소">−</button><output id="zoom-value">100%</output><button id="zoom-in" type="button" aria-label="확대">+</button>
             <button id="fit" type="button">화면 맞춤</button>
           </div>
+          <button id="annotate" class="secondary icon-only" type="button" aria-label="그리기" title="그리기" aria-pressed="false" aria-controls="annotate-toolbar">
+            <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z"></path>
+              <path d="m13.5 6.5 4 4"></path>
+            </svg>
+          </button>
           <button id="crop" class="secondary icon-only" type="button" aria-label="크롭" title="크롭" aria-pressed="false">
             <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M7 3v12a2 2 0 0 0 2 2h12"></path>
@@ -46,11 +52,52 @@
             <button id="crop-apply" class="primary" type="button">크롭 적용</button>
           </div>
         </section>
+        <section id="annotate-toolbar" class="annotate-toolbar" aria-label="그리기 도구" hidden>
+          <div class="annotate-tools" role="group" aria-label="도구">
+            <button type="button" data-annotate-tool="pen" aria-pressed="true"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z"></path></svg><span>펜</span></button>
+            <button type="button" data-annotate-tool="marker" aria-pressed="false"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 15 6-6 4 4-6 6H9v-4Z"></path><path d="M4 21h7"></path><path d="m15 9 2-2 4 4-2 2"></path></svg><span>마커</span></button>
+            <button type="button" data-annotate-tool="rect" aria-pressed="false"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1.5"></rect></svg><span>사각형</span></button>
+            <button type="button" data-annotate-tool="ellipse" aria-pressed="false"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="8.5" ry="6.5"></ellipse></svg><span>원</span></button>
+            <button type="button" data-annotate-tool="arrow" aria-pressed="false"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19 19 5"></path><path d="M10 5h9v9"></path></svg><span>화살표</span></button>
+            <button type="button" data-annotate-tool="mosaic" aria-pressed="false"><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1.5"></rect><path d="M4 12h16M12 4v16M8 4v16M16 4v16M4 8h16M4 16h16"></path></svg><span>모자이크</span></button>
+          </div>
+          <div class="annotate-style">
+            <div class="annotate-colors" role="group" aria-label="색상">
+              <button type="button" class="swatch" data-annotate-color="#ef4444" aria-label="빨강" title="빨강" aria-pressed="true" style="--swatch: #ef4444"></button>
+              <button type="button" class="swatch" data-annotate-color="#f97316" aria-label="주황" title="주황" aria-pressed="false" style="--swatch: #f97316"></button>
+              <button type="button" class="swatch" data-annotate-color="#facc15" aria-label="노랑" title="노랑" aria-pressed="false" style="--swatch: #facc15"></button>
+              <button type="button" class="swatch" data-annotate-color="#22c55e" aria-label="초록" title="초록" aria-pressed="false" style="--swatch: #22c55e"></button>
+              <button type="button" class="swatch" data-annotate-color="#3b82f6" aria-label="파랑" title="파랑" aria-pressed="false" style="--swatch: #3b82f6"></button>
+              <button type="button" class="swatch" data-annotate-color="#111827" aria-label="검정" title="검정" aria-pressed="false" style="--swatch: #111827"></button>
+              <button type="button" class="swatch" data-annotate-color="#ffffff" aria-label="흰색" title="흰색" aria-pressed="false" style="--swatch: #ffffff"></button>
+              <label class="swatch swatch-custom" title="직접 선택"><input id="annotate-color" type="color" value="#ef4444" aria-label="직접 색상 선택"></label>
+            </div>
+            <button id="annotate-fill" class="annotate-fill" type="button" aria-pressed="false" title="사각형·원 내부 채우기" disabled>
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><rect class="fill-icon" x="4" y="6" width="16" height="12" rx="1.5"></rect></svg>
+              <span>채우기</span>
+            </button>
+            <label class="annotate-size">굵기 <input id="annotate-size" type="range" min="1" max="24" step="1" value="4"><output id="annotate-size-value" for="annotate-size">4</output></label>
+          </div>
+          <div class="annotate-actions">
+            <button id="annotate-undo" class="secondary icon-only" type="button" aria-label="실행 취소" title="실행 취소 (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled>
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg>
+            </button>
+            <button id="annotate-redo" class="secondary icon-only" type="button" aria-label="다시 실행" title="다시 실행 (Ctrl+Shift+Z)" aria-keyshortcuts="Control+Shift+Z Control+Y Meta+Shift+Z" disabled>
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg>
+            </button>
+            <button id="annotate-clear" class="secondary" type="button" disabled>모두 지우기</button>
+            <button id="annotate-done" class="primary" type="button">완료</button>
+          </div>
+        </section>
       </header>
       <section class="stage" id="stage" aria-label="캡처 이미지 미리보기">
         <div class="empty" id="empty"><span class="spinner" aria-hidden="true"></span><strong>캡처 이미지를 준비하고 있습니다</strong></div>
         <div id="image-shell" class="image-shell" hidden>
           <img id="capture" alt="캡처 결과" hidden>
+          <canvas id="annotation-canvas" class="annotation-canvas" width="0" height="0" aria-hidden="true" hidden></canvas>
+          <div id="annotation-layer" class="annotation-layer" role="region" aria-label="그리기 영역입니다. 이미지 위를 드래그해 선택한 도구로 그립니다." hidden>
+            <svg id="annotation-preview" class="annotation-preview" preserveAspectRatio="none" aria-hidden="true"></svg>
+          </div>
           <div id="crop-layer" class="crop-layer" role="region" aria-label="크롭 선택 상자입니다. 상자 안을 드래그하거나 방향키로 이동하고, 변과 모서리 핸들로 크기를 조절할 수 있습니다. 위쪽 숫자 입력도 사용할 수 있습니다." tabindex="0" hidden>
             <div id="crop-selection" class="crop-selection" aria-hidden="true">
               <span id="crop-size" class="crop-size"></span>
