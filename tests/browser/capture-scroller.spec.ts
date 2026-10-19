@@ -21,6 +21,21 @@ const APP_SHELL = `<!doctype html><title>shell</title><style>
   #tail { height: 200px; background: rgb(0, 128, 0); }
 </style><aside></aside><main><div id="head"></div><div id="card"></div><div id="tail"></div></main>`;
 
+/**
+ * Naver-blog layout: the top document is locked and the whole post lives in a full-window
+ * same-origin iframe whose own document scrolls. Same 1500px content as the app shell.
+ */
+const FRAME_HOST = `<!doctype html><title>frame host</title><style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  #mainFrame { display: block; width: 100%; height: 100%; border: 0; }
+</style><iframe id="mainFrame" src="/post.html" title="post"></iframe>`;
+const FRAME_POST = `<!doctype html><title>post</title><style>
+  body { margin: 0; }
+  #head { height: 300px; background: rgb(255, 0, 0); }
+  #card { height: 900px; background: rgb(0, 0, 255); border-bottom: 100px solid rgb(255, 255, 0); }
+  #tail { height: 200px; background: rgb(0, 128, 0); }
+</style><div id="head"></div><div id="card"></div><div id="tail"></div>`;
+
 async function launch(): Promise<{ context: BrowserContext; worker: Worker; extensionId: string }> {
   const extensionPath = resolve(import.meta.dirname, '../../dist');
   const context = await chromium.launchPersistentContext('', {
@@ -37,6 +52,17 @@ async function openShell(context: BrowserContext): Promise<Page> {
   const page = await context.newPage();
   await page.route('**/*', (route) => route.fulfill({ contentType: 'text/html', body: APP_SHELL }));
   await page.goto(PAGE_URL);
+  return page;
+}
+
+async function openFrameHost(context: BrowserContext): Promise<Page> {
+  const page = await context.newPage();
+  await page.route('**/*', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: route.request().url().endsWith('/post.html') ? FRAME_POST : FRAME_HOST,
+  }));
+  await page.goto(PAGE_URL);
+  await expect(page.frameLocator('#mainFrame').locator('#card')).toBeVisible();
   return page;
 }
 
@@ -137,5 +163,41 @@ test('element capture of a scroll container captures its entire scrolled content
     expectColor(await capture.pixel(10 * scale, 100 * scale), RED);
     expectColor(await capture.pixel(10 * scale, 1_250 * scale), YELLOW);
     await expect.poll(() => page.locator('main').evaluate((element) => element.scrollTop)).toBe(900);
+  } finally { await context.close(); }
+});
+
+test('element capture selects inside a same-origin iframe and scrolls that frame to capture the whole element', async () => {
+  const { context, worker, extensionId } = await launch();
+  try {
+    const page = await openFrameHost(context);
+    const frame = page.frameLocator('#mainFrame');
+    const cardWidth = await frame.locator('#card').evaluate((element) => element.getBoundingClientRect().width);
+    await activate(context, worker, extensionId, page, 'capture-element');
+    await expect(page.locator('[data-pixelscope-overlay]')).toHaveCount(1);
+    await page.mouse.move(400, 450);
+    await page.mouse.down();
+    await page.mouse.up();
+    const capture = await readCapture(context);
+    const scale = capture.width / cardWidth;
+    expect(capture.height).toBe(Math.ceil(1_000 * scale));
+    expectColor(await capture.pixel(10 * scale, 50 * scale), BLUE);
+    expectColor(await capture.pixel(10 * scale, 850 * scale), BLUE);
+    expectColor(await capture.pixel(10 * scale, 950 * scale), YELLOW);
+    await expect.poll(() => frame.locator('html').evaluate((element) => element.ownerDocument.defaultView?.scrollY ?? -1)).toBe(0);
+  } finally { await context.close(); }
+});
+
+test('full-page capture scrolls a full-window same-origin iframe document', async () => {
+  const { context, worker, extensionId } = await launch();
+  try {
+    const page = await openFrameHost(context);
+    await activate(context, worker, extensionId, page, 'capture-page');
+    const capture = await readCapture(context);
+    const scale = capture.width / 800;
+    expect(capture.height).toBe(Math.ceil(1_500 * scale));
+    expectColor(await capture.pixel(400 * scale, 100 * scale), RED);
+    expectColor(await capture.pixel(400 * scale, 700 * scale), BLUE);
+    expectColor(await capture.pixel(400 * scale, 1_250 * scale), YELLOW);
+    expectColor(await capture.pixel(400 * scale, 1_450 * scale), GREEN);
   } finally { await context.close(); }
 });

@@ -4,10 +4,15 @@ import type { ToolLifecycle } from '../tool-controller';
 import { calculateAutoScroll, rectangleFromPoints, type Point } from '../coordinate';
 import { findInspectableElement, isAreaDrag } from '../measure-utils';
 import { CaptureOverlay } from './capture-overlay';
+import {
+  accessibleFrameDocument, deepElementFromPoint, eventViewportPoint, frameOffset, isHtmlElement, isIframeElement,
+  sameOriginFrameDocuments, styleOf, viewportRect,
+} from './frames';
 
 export type CaptureMode = 'element' | 'page';
 const FIXED_CAPTURE_ATTRIBUTE = 'data-pixelscope-capture-fixed';
 const SCROLLABLE_OVERFLOW = new Set(['auto', 'scroll', 'overlay']);
+const INTERACTION_STYLE = 'html,html *{cursor:crosshair!important;-webkit-user-select:none!important;user-select:none!important}';
 
 interface SuppressedStyle {
   readonly visibility: string;
@@ -31,6 +36,10 @@ export class CaptureController implements ToolLifecycle {
   #overlay: CaptureOverlay | null = null;
   #style: HTMLStyleElement | null = null;
   #captureStyle: HTMLStyleElement | null = null;
+  /** Same capture-preparation style inside the scrolled frame's document, when that is not the top one. */
+  #frameCaptureStyle: HTMLStyleElement | null = null;
+  /** Same-origin frames that receive this tool's listeners and crosshair cursor. */
+  readonly #frameDocuments = new Map<Document, HTMLStyleElement>();
   #captureTarget: Element | null = null;
   #frame: number | null = null;
   #point = { x: 0, y: 0 };
@@ -61,9 +70,10 @@ export class CaptureController implements ToolLifecycle {
     this.#active = true;
     this.#overlay = new CaptureOverlay(() => this.#stop());
     this.#style = document.createElement('style'); this.#style.dataset.pixelscopeInteraction = '';
-    this.#style.textContent = 'html,html *{cursor:crosshair!important;-webkit-user-select:none!important;user-select:none!important}';
+    this.#style.textContent = INTERACTION_STYLE;
     document.documentElement.append(this.#style);
     this.#addListeners();
+    this.#attachFrames();
     if (this.#mode === 'page') queueMicrotask(() => {
       if (!this.#active) return;
       const scroller = isPageScrollable() ? null : findPageScroller();
@@ -79,7 +89,7 @@ export class CaptureController implements ToolLifecycle {
     if (this.#capturing) notifyCaptureCancel();
     this.#active = false; this.#capturing = false;
     this.#progress = null;
-    this.#restorePage(); this.#removeListeners();
+    this.#restorePage(); this.#removeListeners(); this.#detachFrames();
     if (this.#frame !== null) cancelAnimationFrame(this.#frame);
     if (this.#autoScrollFrame !== null) cancelAnimationFrame(this.#autoScrollFrame);
     this.#frame = null; this.#autoScrollFrame = null; this.#elementState = { type: 'idle' };
@@ -104,15 +114,19 @@ export class CaptureController implements ToolLifecycle {
 
   readonly #onPointerDown = (event: PointerEvent): void => {
     if (this.#mode !== 'element' || this.#capturing || !event.isPrimary || event.button !== 0) return;
-    const point = { x: event.clientX, y: event.clientY };
+    const point = eventViewportPoint(event);
     const element = this.#elementAt(point);
-    if (element !== null) this.#overlay?.renderElement(element);
-    if (event.pointerType !== 'touch') { event.preventDefault(); this.#overlay?.capturePointer(event.pointerId); }
+    if (element !== null) this.#overlay?.renderElement(element, viewportRect(element));
+    if (event.pointerType !== 'touch') {
+      event.preventDefault();
+      // A pointer pressed inside a frame keeps delivering to that frame; capture only works in this document.
+      if (!isFromFrame(event)) this.#overlay?.capturePointer(event.pointerId);
+    }
     this.#elementState = { type: 'pending', element, startViewport: point, pointerId: event.pointerId, pointerType: event.pointerType };
   };
   readonly #onPointerMove = (event: PointerEvent): void => {
     if (this.#mode !== 'element' || this.#capturing || !event.isPrimary) return;
-    this.#point = { x: event.clientX, y: event.clientY };
+    this.#point = eventViewportPoint(event);
     if (this.#elementState.type === 'pending' && this.#elementState.pointerId === event.pointerId) {
       if (this.#elementState.pointerType === 'touch') {
         if (isAreaDrag(this.#elementState.startViewport, this.#point)) {
@@ -138,7 +152,7 @@ export class CaptureController implements ToolLifecycle {
   readonly #renderHover = (): void => {
     this.#frame = null;
     const element = this.#elementAt(this.#point);
-    if (element !== null) this.#overlay?.renderElement(element);
+    if (element !== null) this.#overlay?.renderElement(element, viewportRect(element));
   };
   readonly #onPointerUp = (event: PointerEvent): void => {
     if (this.#mode !== 'element' || this.#capturing || !event.isPrimary) return;
@@ -154,7 +168,7 @@ export class CaptureController implements ToolLifecycle {
     if (this.#elementState.type === 'pending' && this.#elementState.pointerId === event.pointerId) {
       event.preventDefault(); event.stopImmediatePropagation();
       this.#overlay?.releasePointer(event.pointerId);
-      const element = this.#elementAt({ x: event.clientX, y: event.clientY }) ?? this.#elementState.element;
+      const element = this.#elementAt(eventViewportPoint(event)) ?? this.#elementState.element;
       this.#elementState = { type: 'idle' };
       if (element !== null) this.#captureElement(element);
       return;
@@ -218,7 +232,7 @@ export class CaptureController implements ToolLifecycle {
   #captureElement(element: Element): void {
     this.#captureTarget = element;
     const title = `${document.title} - ${element.tagName.toLowerCase()}`;
-    if (element instanceof HTMLElement && isScrollContainer(element)) {
+    if (isHtmlElement(element) && isScrollContainer(element)) {
       this.#scrollTarget = element;
       this.#captureWholeTarget = true;
       void this.#capture(this.#targetRect(), title);
@@ -228,7 +242,7 @@ export class CaptureController implements ToolLifecycle {
     void this.#capture(this.#elementRect(element), title);
   }
   #elementRect(element: Element): CaptureRect {
-    const source = element.getBoundingClientRect();
+    const source = viewportRect(element);
     if (this.#scrollTarget === null) return { left: source.left + scrollX, top: source.top + scrollY, width: source.width, height: source.height };
     const origin = clientOrigin(this.#scrollTarget);
     const content = this.#targetRect();
@@ -241,7 +255,7 @@ export class CaptureController implements ToolLifecycle {
     return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
   }
   #elementAt(point: { readonly x: number; readonly y: number }): Element | null {
-    return findInspectableElement(document.elementFromPoint(point.x, point.y), this.#overlay?.host ?? null);
+    return findInspectableElement(deepElementFromPoint(point), this.#overlay?.host ?? null);
   }
   readonly #onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== 'Escape') return;
@@ -318,6 +332,7 @@ export class CaptureController implements ToolLifecycle {
     this.#viewportSnapshot.clear();
     this.#viewportSnapshotPosition = null;
     this.#captureStyle?.remove(); this.#captureStyle = null;
+    this.#frameCaptureStyle?.remove(); this.#frameCaptureStyle = null;
     document.documentElement.style.scrollBehavior = this.#originalScrollBehavior;
     if (this.#originalScroll !== null) this.#targetScrollTo(this.#originalScroll);
     this.#originalScroll = null;
@@ -348,6 +363,7 @@ export class CaptureController implements ToolLifecycle {
   }
   #preparePageForCapture(): void {
     this.#captureStyle?.remove();
+    this.#frameCaptureStyle?.remove(); this.#frameCaptureStyle = null;
     this.#captureStyle = document.createElement('style');
     this.#captureStyle.dataset.pixelscopeCapturePreparation = '';
     this.#captureStyle.textContent = `
@@ -362,6 +378,12 @@ export class CaptureController implements ToolLifecycle {
       }
     `;
     document.documentElement.append(this.#captureStyle);
+    const targetDocument = this.#scrollTarget?.ownerDocument;
+    if (targetDocument !== undefined && targetDocument !== document) {
+      this.#frameCaptureStyle = targetDocument.createElement('style');
+      this.#frameCaptureStyle.textContent = this.#captureStyle.textContent;
+      targetDocument.documentElement.append(this.#frameCaptureStyle);
+    }
   }
   #setViewportFixedSuppressed(suppressed: boolean): void {
     if (!suppressed) {
@@ -402,7 +424,7 @@ export class CaptureController implements ToolLifecycle {
     for (const element of this.#captureCandidates()) {
       if (element.hasAttribute('data-pixelscope-overlay')) continue;
       if (scrollTarget !== null && (element === scrollTarget || element.contains(scrollTarget))) continue;
-      const rect = element.getBoundingClientRect();
+      const rect = viewportRect(element);
       if (intersectsViewport(rect)) this.#viewportSnapshot.set(element, rect);
     }
   }
@@ -412,7 +434,8 @@ export class CaptureController implements ToolLifecycle {
    */
   #captureCandidates(): HTMLElement[] {
     const root = this.#scrollTarget === null ? null : findViewportAttachedRoot(this.#scrollTarget);
-    return captureElements(root ?? document.body);
+    const ownerDocument = (this.#scrollTarget ?? this.#captureTarget)?.ownerDocument ?? document;
+    return captureElements(root ?? ownerDocument.body);
   }
   #addListeners(): void {
     window.addEventListener('pointerdown', this.#onPointerDown, { capture: true, passive: false });
@@ -421,6 +444,47 @@ export class CaptureController implements ToolLifecycle {
     window.addEventListener('pointercancel', this.#onPointerCancel, { capture: true });
     window.addEventListener('click', this.#onClick, { capture: true, passive: false });
     window.addEventListener('keydown', this.#onKeyDown, { capture: true, passive: false });
+    // `load` does not bubble, but a capturing window listener still sees every iframe's load event.
+    window.addEventListener('load', this.#onFrameLoad, true);
+  }
+  /**
+   * Pointer events over a same-origin iframe never reach this window, so each such frame gets the
+   * same listeners and cursor. Frames that (re)load while the tool is active are picked up too.
+   */
+  #attachFrames(): void {
+    const current = new Set(sameOriginFrameDocuments());
+    for (const [frameDocument, style] of this.#frameDocuments) {
+      if (current.has(frameDocument)) continue;
+      style.remove();
+      if (frameDocument.defaultView !== null) removeToolListeners(frameDocument.defaultView, this);
+      this.#frameDocuments.delete(frameDocument);
+    }
+    for (const frameDocument of current) {
+      const view = frameDocument.defaultView;
+      if (this.#frameDocuments.has(frameDocument) || view === null) continue;
+      const style = frameDocument.createElement('style');
+      style.dataset.pixelscopeInteraction = '';
+      style.textContent = INTERACTION_STYLE;
+      frameDocument.documentElement.append(style);
+      addToolListeners(view, this);
+      this.#frameDocuments.set(frameDocument, style);
+    }
+  }
+  #detachFrames(): void {
+    for (const [frameDocument, style] of this.#frameDocuments) {
+      style.remove();
+      if (frameDocument.defaultView !== null) removeToolListeners(frameDocument.defaultView, this);
+    }
+    this.#frameDocuments.clear();
+  }
+  readonly #onFrameLoad = (event: Event): void => {
+    if (event.target instanceof Element && isIframeElement(event.target)) this.#attachFrames();
+  };
+  get listeners(): ToolListeners {
+    return {
+      pointerdown: this.#onPointerDown, pointermove: this.#onPointerMove, pointerup: this.#onPointerUp,
+      pointercancel: this.#onPointerCancel, click: this.#onClick, keydown: this.#onKeyDown,
+    };
   }
   #removeListeners(): void {
     window.removeEventListener('pointerdown', this.#onPointerDown, true);
@@ -429,13 +493,15 @@ export class CaptureController implements ToolLifecycle {
     window.removeEventListener('pointercancel', this.#onPointerCancel, true);
     window.removeEventListener('click', this.#onClick, true);
     window.removeEventListener('keydown', this.#onKeyDown, true);
+    window.removeEventListener('load', this.#onFrameLoad, true);
   }
 }
 
 /**
- * When the document itself can't scroll (an app shell with a locked root, or a modal that locks body
- * scroll), full-page capture would otherwise scroll nothing and produce a single viewport. Pick the
- * largest visible container that actually scrolls vertically and tile through it instead.
+ * When the document itself can't scroll (an app shell with a locked root, a modal that locks body
+ * scroll, or a blog that renders the post in a full-window same-origin iframe), full-page capture
+ * would otherwise scroll nothing and produce a single viewport. Pick the largest visible container
+ * or frame document that actually scrolls vertically and tile through it instead.
  */
 function findPageScroller(): HTMLElement | null {
   const viewportArea = innerWidth * innerHeight;
@@ -443,8 +509,11 @@ function findPageScroller(): HTMLElement | null {
   let bestArea = 0;
   for (const element of document.body.querySelectorAll<HTMLElement>('*')) {
     if (element.hasAttribute('data-pixelscope-overlay')) continue;
-    if (element.scrollHeight <= element.clientHeight + 2) continue;
-    if (!SCROLLABLE_OVERFLOW.has(getComputedStyle(element).overflowY)) continue;
+    const candidate = scrollableFrameRoot(element) ?? element;
+    if (candidate === element) {
+      if (element.scrollHeight <= element.clientHeight + 2) continue;
+      if (!SCROLLABLE_OVERFLOW.has(getComputedStyle(element).overflowY)) continue;
+    }
     const rect = element.getBoundingClientRect();
     const left = Math.max(rect.left, 0);
     const top = Math.max(rect.top, 0);
@@ -455,40 +524,106 @@ function findPageScroller(): HTMLElement | null {
     // A scroller hidden behind a modal backdrop is not what the user is looking at.
     const hit = document.elementFromPoint(left + width / 2, top + height / 2);
     if (hit === null || !element.contains(hit)) continue;
-    bestArea = area; best = element;
+    bestArea = area; best = candidate;
   }
   return best;
 }
 
+/** For a same-origin iframe whose own document scrolls, that document's scrolling element. */
+function scrollableFrameRoot(element: Element): HTMLElement | null {
+  if (!isIframeElement(element)) return null;
+  const frameDocument = accessibleFrameDocument(element);
+  const view = frameDocument?.defaultView;
+  const scroller = frameDocument?.scrollingElement;
+  if (view == null || scroller == null || !isHtmlElement(scroller) || !isPageScrollable(view)) return null;
+  return scroller;
+}
+
 function isScrollContainer(element: HTMLElement): boolean {
-  if (element === document.documentElement || element === document.scrollingElement) return false;
-  const style = getComputedStyle(element);
+  if (element === element.ownerDocument.documentElement || element === element.ownerDocument.scrollingElement) return false;
+  const style = styleOf(element);
   return (SCROLLABLE_OVERFLOW.has(style.overflowY) && element.scrollHeight > element.clientHeight + 2)
     || (SCROLLABLE_OVERFLOW.has(style.overflowX) && element.scrollWidth > element.clientWidth + 2);
 }
 
-/** The nearest scroll container that hides part of the element, so capture can scroll it into view. */
+/**
+ * The nearest scroll container that hides part of the element, so capture can scroll it into view.
+ * Inside a same-origin frame the frame's own document scroll counts too, and the search continues
+ * outward through the <iframe> element into the parent document.
+ */
 function findClippingScroller(element: Element): HTMLElement | null {
-  const bounds = element.getBoundingClientRect();
-  for (let current = element.parentElement; current !== null && current !== document.documentElement; current = current.parentElement) {
-    if (!isScrollContainer(current)) continue;
-    const origin = clientOrigin(current);
-    if (bounds.left < origin.x - 1 || bounds.top < origin.y - 1
-      || bounds.right > origin.x + current.clientWidth + 1 || bounds.bottom > origin.y + current.clientHeight + 1) return current;
+  const bounds = viewportRect(element);
+  let node: Element = element;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const ownerDocument = node.ownerDocument;
+    for (let current = node.parentElement; current !== null && current !== ownerDocument.documentElement; current = current.parentElement) {
+      if (isScrollContainer(current) && clips(bounds, current)) return current;
+    }
+    const view = ownerDocument.defaultView;
+    if (ownerDocument === document || view === null) return null;
+    const frameScroller = ownerDocument.scrollingElement;
+    if (frameScroller !== null && isHtmlElement(frameScroller) && isPageScrollable(view) && clips(bounds, frameScroller)) return frameScroller;
+    const frame = view.frameElement;
+    if (frame === null) return null;
+    node = frame;
   }
   return null;
 }
 
-/** Viewport position of the element's scrollport, inside its borders. */
+function clips(bounds: DOMRect, scroller: HTMLElement): boolean {
+  const origin = clientOrigin(scroller);
+  return bounds.left < origin.x - 1 || bounds.top < origin.y - 1
+    || bounds.right > origin.x + scroller.clientWidth + 1 || bounds.bottom > origin.y + scroller.clientHeight + 1;
+}
+
+/**
+ * Top-viewport position of the element's scrollport, inside its borders. A frame document's
+ * scrolling element is that frame's viewport, which starts at the frame's content box.
+ */
 function clientOrigin(element: HTMLElement): CaptureScrollPosition {
+  const offset = frameOffset(element.ownerDocument);
+  if (element === element.ownerDocument.scrollingElement) return offset;
   const bounds = element.getBoundingClientRect();
-  return { x: bounds.left + element.clientLeft, y: bounds.top + element.clientTop };
+  return { x: bounds.left + element.clientLeft + offset.x, y: bounds.top + element.clientTop + offset.y };
+}
+
+interface ToolListeners {
+  readonly pointerdown: (event: PointerEvent) => void;
+  readonly pointermove: (event: PointerEvent) => void;
+  readonly pointerup: (event: PointerEvent) => void;
+  readonly pointercancel: (event: PointerEvent) => void;
+  readonly click: (event: MouseEvent) => void;
+  readonly keydown: (event: KeyboardEvent) => void;
+}
+
+function addToolListeners(view: Window, controller: { readonly listeners: ToolListeners }): void {
+  const { pointerdown, pointermove, pointerup, pointercancel, click, keydown } = controller.listeners;
+  view.addEventListener('pointerdown', pointerdown, { capture: true, passive: false });
+  view.addEventListener('pointermove', pointermove, { capture: true, passive: false });
+  view.addEventListener('pointerup', pointerup, { capture: true, passive: false });
+  view.addEventListener('pointercancel', pointercancel, { capture: true });
+  view.addEventListener('click', click, { capture: true, passive: false });
+  view.addEventListener('keydown', keydown, { capture: true, passive: false });
+}
+
+function removeToolListeners(view: Window, controller: { readonly listeners: ToolListeners }): void {
+  const { pointerdown, pointermove, pointerup, pointercancel, click, keydown } = controller.listeners;
+  view.removeEventListener('pointerdown', pointerdown, true);
+  view.removeEventListener('pointermove', pointermove, true);
+  view.removeEventListener('pointerup', pointerup, true);
+  view.removeEventListener('pointercancel', pointercancel, true);
+  view.removeEventListener('click', click, true);
+  view.removeEventListener('keydown', keydown, true);
+}
+
+function isFromFrame(event: Event): boolean {
+  return event.target instanceof Node && event.target.ownerDocument !== null && event.target.ownerDocument !== document;
 }
 
 function findViewportAttachedRoot(element: HTMLElement): HTMLElement | null {
   let current: HTMLElement | null = element;
   while (current !== null) {
-    const position = getComputedStyle(current).position;
+    const position = styleOf(current).position;
     if (position === 'fixed' || position === 'sticky') return current;
     current = current.parentElement;
   }
@@ -509,13 +644,14 @@ function notifyCaptureCancel(): void {
   catch { /* Extension context invalidated; nothing to cancel on the other end. */ }
 }
 
-function isPageScrollable(): boolean {
-  const scrolling = document.scrollingElement ?? document.documentElement;
-  if (scrolling.scrollHeight <= document.documentElement.clientHeight + 2) return false;
-  const originalY = window.scrollY;
-  window.scrollTo(window.scrollX, originalY + 1);
-  const moved = window.scrollY !== originalY;
-  window.scrollTo(window.scrollX, originalY);
+function isPageScrollable(view: Window = window): boolean {
+  const viewDocument = view.document;
+  const scrolling = viewDocument.scrollingElement ?? viewDocument.documentElement;
+  if (scrolling.scrollHeight <= viewDocument.documentElement.clientHeight + 2) return false;
+  const originalY = view.scrollY;
+  view.scrollTo(view.scrollX, originalY + 1);
+  const moved = view.scrollY !== originalY;
+  view.scrollTo(view.scrollX, originalY);
   return moved;
 }
 
@@ -556,9 +692,9 @@ function throwIfCaptureAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new DOMException('캡처가 중단되었습니다.', 'AbortError');
 }
 function isViewportAttached(element: HTMLElement, previousRect?: DOMRect): boolean {
-  const style = getComputedStyle(element);
+  const style = styleOf(element);
   if (style.visibility === 'hidden' || style.display === 'none') return false;
-  const rect = element.getBoundingClientRect();
+  const rect = viewportRect(element);
   if (!intersectsViewport(rect)) return false;
   if (style.position === 'fixed' || style.position === 'sticky') return true;
   return previousRect !== undefined

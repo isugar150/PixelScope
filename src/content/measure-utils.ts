@@ -54,10 +54,11 @@ export function isAreaDrag(start: Point, current: Point, threshold = DRAG_THRESH
 
 export function isInspectableElement(element: Element | null, overlayHost?: Element | null): boolean {
   if (element === null || element === overlayHost || overlayHost?.contains(element) === true) return false;
-  if (element === document.documentElement || element === document.body) return false;
+  // Compare against the element's own document so a same-origin frame's <html>/<body> is skipped too.
+  if (element === element.ownerDocument.documentElement || element === element.ownerDocument.body) return false;
   const rect = element.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return false;
-  const style = window.getComputedStyle(element);
+  const style = (element.ownerDocument.defaultView ?? window).getComputedStyle(element);
   return style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none';
 }
 

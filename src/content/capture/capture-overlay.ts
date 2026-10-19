@@ -32,8 +32,7 @@ export class CaptureOverlay {
 
   public get host(): HTMLElement { return this.#host; }
 
-  public renderElement(element: Element): void {
-    const rect = element.getBoundingClientRect();
+  public renderElement(element: Element, rect: DOMRect = element.getBoundingClientRect()): void {
     this.#box.style.cssText = `display:block;left:${String(rect.left)}px;top:${String(rect.top)}px;width:${String(rect.width)}px;height:${String(rect.height)}px`;
     this.#label.textContent = `캡처 · ${describeElement(element)} · ${String(Math.round(rect.width))} × ${String(Math.round(rect.height))} px`;
     this.#label.style.display = 'block';
